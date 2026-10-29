@@ -37,7 +37,7 @@ export interface DayReport {
   weather: Weather;
   households: number;
   meanHouseholdSize: number;
-  events: { kind: EventKind; title: string; visits: number }[];
+  events: { kind: EventKind; title: string; visits: number; icon: string; start: number; end: number; byPlayer: boolean; sid?: number }[];
 }
 
 export interface AgentInfo {
@@ -96,6 +96,10 @@ export interface Thought {
 
 /** Visiteurs venus de l'extérieur pour les grands événements (agents en réserve). */
 export const VISITOR_POOL = 5000;
+/** Véhicules de transit (traversée d'Annecy) et de livraison, par jour. */
+export const TRANSIT_POOL = 3000;
+/** Chaque voiture simulée en représente plusieurs (AGENT_SCALE) : on dessine aussi les suivantes. */
+export const FRAME_CAPACITY_FACTOR = 2;
 
 /** Bilan d'un événement à sa clôture (chiffres en personnes réelles et en €). */
 export interface EventBilan {

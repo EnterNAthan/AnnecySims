@@ -18,8 +18,10 @@ const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)
 const pct = (v: number) => `${Math.round(v * 100)} %`;
 const fmt = (n: number) => Math.round(n).toLocaleString("fr-FR");
 
-interface Decision {
+export interface Decision {
   sid: number;
+  /** jour de la simulation où la décision a été prise */
+  day: number;
   event: EventSummary;
   cohorts: CohortStat[];
   responses: CohortResponse[] | null;
@@ -31,6 +33,7 @@ interface Decision {
   bilan: EventBilan | null;
   report: FinalReport | null;
   reporting: boolean;
+  cancelled?: boolean;
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -57,7 +60,9 @@ export class DecisionsPanel {
       const sid = Number(t.dataset.sid);
       if (t.dataset.act === "cancel") {
         this.send.cancel(sid);
-        this.decisions.delete(sid);
+        // la décision reste dans l'historique, marquée annulée
+        const d = this.decisions.get(sid);
+        if (d) d.cancelled = true;
         this.render();
       } else if (t.dataset.act === "goto") this.send.goTo(sid);
       else if (t.dataset.act === "follow") this.send.follow(sid);
@@ -65,8 +70,22 @@ export class DecisionsPanel {
   }
 
   /** Nouvelle décision : on demande à Claude comment chaque groupe concerné va s'organiser. */
-  request(sid: number, event: EventSummary, cohorts: CohortStat[]) {
-    const d: Decision = { sid, event, cohorts, responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false, bilan: null, report: null, reporting: false };
+  /** appelé à chaque changement (pour l'historique) */
+  onChange: () => void = () => {};
+
+  /** Toutes les décisions, de la plus récente à la plus ancienne. */
+  all(): Decision[] {
+    return [...this.decisions.values()].reverse();
+  }
+
+  /** Rapport complet d'une décision (pour l'historique). */
+  detail(sid: number): string {
+    const d = this.decisions.get(sid);
+    return d ? this.card(d, true) : "";
+  }
+
+  request(sid: number, event: EventSummary, cohorts: CohortStat[], day = 0) {
+    const d: Decision = { sid, day, event, cohorts, responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false, bilan: null, report: null, reporting: false };
     this.decisions.set(sid, d);
     if (cohorts.length) {
       d.ready = post<{ responses: CohortResponse[]; source: "claude" | "local" }>("/api/cohorts", { event, cohorts })
@@ -121,12 +140,14 @@ export class DecisionsPanel {
   }
 
   private render() {
-    const list = [...this.decisions.values()].reverse().slice(0, 4);
+    this.onChange();
+    // le panneau ne montre que les décisions récentes ; les autres sont dans l'historique
+    const list = [...this.decisions.values()].filter((d) => !d.cancelled).reverse().slice(0, 4);
     this.el.classList.toggle("hidden", !list.length);
     this.el.innerHTML = `<div class="panel-title">🏛️ Décisions</div>` + list.map((d) => this.card(d)).join("");
   }
 
-  private card(d: Decision): string {
+  private card(d: Decision, full = false): string {
     const spec = EVENT_SPECS[d.event.kind];
     const icon = d.event.traits?.icon ?? spec.icon;
     const i = d.impact;
@@ -135,10 +156,10 @@ export class DecisionsPanel {
       <details class="decision" open>
         <summary>
           <span class="d-icon">${icon}</span>
-          <span class="d-title"><b>${d.event.title}</b><small>${i ? (i.active ? "🔴 en cours" : "✔ terminé") : d.event.when}</small></span>
-          <button data-act="follow" data-sid="${d.sid}" title="Suivre l'événement avec la caméra">🎥</button>
+          <span class="d-title"><b>${d.event.title}</b><small>${d.cancelled ? "annulé" : i ? (i.active ? "🔴 en cours" : "✔ terminé") : d.event.when}</small></span>
+          ${full ? "" : `<button data-act="follow" data-sid="${d.sid}" title="Suivre l'événement avec la caméra">🎥</button>
           <button data-act="goto" data-sid="${d.sid}" title="Voir sur la carte">📍</button>
-          <button data-act="cancel" data-sid="${d.sid}" title="Annuler la décision">✕</button>
+          <button data-act="cancel" data-sid="${d.sid}" title="Annuler la décision">✕</button>`}
         </summary>
         ${status}
         ${this.params(d)}

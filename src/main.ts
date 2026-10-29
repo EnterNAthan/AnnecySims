@@ -11,11 +11,12 @@ import { EventsView, hhmm } from "./render/events";
 import { ThoughtBubbles } from "./render/thoughts";
 import { setupCommandBar } from "./ui/command";
 import { DecisionsPanel } from "./ui/decisions";
+import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
 import { PROFILES, PROFILE_COLOR, PROFILE_LABEL } from "./sim/population";
-import { VISITOR_POOL, FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type Thought, type ToWorker } from "./sim/protocol";
+import { VISITOR_POOL, TRANSIT_POOL, FRAME_CAPACITY_FACTOR, FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type Thought, type ToWorker } from "./sim/protocol";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const fmt = (n: number) => Math.round(n).toLocaleString("fr-FR");
@@ -26,7 +27,8 @@ async function main() {
   const residents = Number(params.get("pop") ?? 10000);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
   const tourists = Math.round(residents * 0.04);
-  const commuters = Math.round(residents * 0.12);
+  // actifs qui viennent travailler à Annecy depuis les communes voisines (≈ la moitié des emplois du centre)
+  const commuters = Math.round(residents * 0.35);
   const startDate = new Date();
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -45,8 +47,9 @@ async function main() {
   setupViewStyle(world, cityMeshes, params.get("view"));
 
   // les visiteurs d'un jour (grands événements) s'ajoutent aux habitants
-  const total = residents + tourists + commuters + VISITOR_POOL;
-  const agents = new AgentsView(total);
+  const total = residents + tourists + commuters + VISITOR_POOL + TRANSIT_POOL;
+  // capacité d'affichage : chaque voiture simulée est dessinée avec ses suiveuses
+  const agents = new AgentsView(total * FRAME_CAPACITY_FACTOR);
   const events = new EventsView(city, world);
   world.scene.add(agents.group, events.group);
   const traffic = new TrafficLayer(city);
@@ -149,13 +152,14 @@ async function main() {
       world.camera.position.set(ev.x - 260, 230, ev.z + 300);
     },
   });
+  const history = new HistoryPanel(decisions, dayReportHtml);
   /** événement suivi par la caméra (jusqu'à ce que l'on déplace la carte) */
   let followedEvent = -1;
   world.controls.addEventListener("start", () => (followedEvent = -1));
 
   // Échange de trames avec le worker : la trame est copiée avant que le buffer reparte.
-  let buffer: ArrayBuffer | null = new ArrayBuffer(total * FRAME_STRIDE * 4);
-  const frame = new Float32Array(total * FRAME_STRIDE);
+  let buffer: ArrayBuffer | null = new ArrayBuffer(total * FRAME_CAPACITY_FACTOR * FRAME_STRIDE * 4);
+  const frame = new Float32Array(total * FRAME_CAPACITY_FACTOR * FRAME_STRIDE);
   let frameCount = 0;
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const msg = e.data;
@@ -170,7 +174,10 @@ async function main() {
         if (feed.length > 7) feed.splice(0, feed.length - 7);
         renderFeed(feed);
       }
-    } else if (msg.type === "day") renderReport(msg.report);
+    } else if (msg.type === "day") {
+      renderReport(msg.report);
+      history.addDay(msg.report);
+    }
     else if (msg.type === "dayStart") {
       currentPlan = msg.plan;
       events.setPlan(msg.plan);
@@ -195,7 +202,7 @@ async function main() {
       if (msg.preview) lookAt(msg.preview.x, msg.preview.z);
     } else if (msg.type === "traffic") traffic.update(msg.data);
     else if (msg.type === "cohortRequest") {
-      decisions.request(msg.sid, msg.event, msg.cohorts);
+      decisions.request(msg.sid, msg.event, msg.cohorts, clock.day);
       followedEvent = -1;
       const ev = currentPlan?.events.find((e) => e.sid === msg.sid);
       if (ev) lookAt(ev.x, ev.z);
@@ -361,12 +368,19 @@ const KIND_LABEL: Record<string, string> = {
 function renderReport(r: DayReport) {
   const el = $("#report");
   el.classList.remove("hidden");
-  const trips = r.trips.walk + r.trips.bike + r.trips.car;
-  const share = (n: number) => `${Math.round((100 * n) / Math.max(1, trips))} %`;
-  const revenue = Object.entries(r.revenue).sort((a, b) => b[1] - a[1]);
   el.innerHTML = `
     <details ${el.querySelector("details")?.open ? "open" : ""}>
     <summary class="panel-title">Bilan du jour ${r.day} · ${new Date(r.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</summary>
+    ${dayReportHtml(r)}
+    </details>`;
+}
+
+/** Contenu d'un bilan quotidien (panneau et historique). */
+function dayReportHtml(r: DayReport) {
+  const trips = r.trips.walk + r.trips.bike + r.trips.car;
+  const share = (n: number) => `${Math.round((100 * n) / Math.max(1, trips))} %`;
+  const revenue = Object.entries(r.revenue).sort((a, b) => b[1] - a[1]);
+  return `
     <div class="kpis">
       <div class="kpi"><small>Satisfaction</small><b>${pct(r.satisfaction)}</b></div>
       <div class="kpi"><small>Congestion</small><b>+${pct(r.congestion)}</b></div>
@@ -375,15 +389,14 @@ function renderReport(r: DayReport) {
     </div>
     <div class="panel-title">Trajets (${fmt(trips)})</div>
     <ul><li>À pied ${share(r.trips.walk)}</li><li>À vélo ${share(r.trips.bike)}</li><li>En voiture ${share(r.trips.car)} · ${fmt(r.carKm)} km</li></ul>
-    ${r.events.length ? `<div class="panel-title">Événements</div><ul>${r.events.map((e) => `<li>${EVENT_ICON[e.kind]} ${e.title}${e.visits ? ` (${fmt(e.visits)} visiteurs)` : ""}</li>`).join("")}</ul>` : ""}
+    ${r.events.length ? `<div class="panel-title">Événements</div><ul>${r.events.map((e) => `<li>${e.icon ?? EVENT_ICON[e.kind]} ${e.title}${e.visits ? ` (${fmt(e.visits)} visiteurs)` : ""}</li>`).join("")}</ul>` : ""}
     ${r.jams.length ? `<div class="panel-title">Bouchons</div><ul>${r.jams.map((j) => `<li>${j.name} (−${Math.round(j.slowdown * 100)} % de vitesse)</li>`).join("")}</ul>` : ""}
     <div class="panel-title">Commerces</div>
     <ul>${revenue.map(([k, v]) => `<li>${KIND_LABEL[k] ?? k} : ${fmt(v)} €</li>`).join("")}</ul>
     <div class="panel-title">Lieux les plus fréquentés</div>
     <ul>${r.topPlaces.map((p) => `<li>${p.name} (${fmt(p.visits)})</li>`).join("")}</ul>
     <div class="panel-title">Satisfaction par profil</div>
-    <ul>${Object.entries(r.satisfactionByProfile).map(([p, s]) => `<li>${PROFILE_LABEL[p as keyof typeof PROFILE_LABEL]} : ${pct(s)}</li>`).join("")}</ul>
-    </details>`;
+    <ul>${Object.entries(r.satisfactionByProfile).map(([p, s]) => `<li>${PROFILE_LABEL[p as keyof typeof PROFILE_LABEL]} : ${pct(s)}</li>`).join("")}</ul>`;
 }
 
 main();

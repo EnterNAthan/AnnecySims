@@ -1038,3 +1038,194 @@ svg.spark .line {
   align-items: center;
   gap: 3px;
 }
+
+/* ---------- Historique ---------- */
+
+#history {
+  position: fixed;
+  inset: 70px 60px 90px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(14, 20, 30, 0.94);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  font-size: 13px;
+}
+
+#history.hidden {
+  display: none;
+}
+
+.h-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.h-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.h-head .seg button {
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.h-head .seg button.active {
+  background: rgba(108, 195, 255, 0.18);
+  color: var(--text);
+}
+
+.h-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.h-trends {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.h-trends > .muted {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.h-trends-empty {
+  margin: 10px 0;
+}
+
+.trend {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.trend small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.trend b {
+  font-size: 16px;
+}
+
+.trend span {
+  margin-left: 6px;
+  font-size: 11px;
+}
+
+.trend svg {
+  display: block;
+  width: 100%;
+  height: 44px;
+  margin-top: 4px;
+}
+
+.trend .line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.trend .mark {
+  stroke: #ffd27a;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.h-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 14px;
+  min-height: 0;
+}
+
+.h-list,
+.h-detail {
+  overflow: auto;
+  min-height: 0;
+}
+
+.h-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 3px 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.h-row:hover,
+.h-row.sel {
+  border-color: var(--accent);
+}
+
+.h-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.h-row em {
+  color: var(--accent);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.h-icon {
+  font-size: 18px;
+}
+
+.h-hint {
+  margin-top: 40px;
+  text-align: center;
+}
+
+.h-detail .decision {
+  margin: 0;
+}
+
+.h-detail .kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.h-detail .kpi {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.h-detail .kpi small {
+  display: block;
+  color: var(--muted);
+}

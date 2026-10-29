@@ -240,9 +240,13 @@ export class AgentsView {
         z += Math.cos(heading) * r;
         heading += Math.PI;
       }
-      this.shownX[id] = x;
-      this.shownZ[id] = z;
-      this.shownFrame[id] = this.frameNo;
+      // profil ≥ 100 : voiture suiveuse (une voiture simulée en représente plusieurs), pas suivie par la caméra
+      const follower = profile >= 100;
+      if (!follower) {
+        this.shownX[id] = x;
+        this.shownZ[id] = z;
+        this.shownFrame[id] = this.frameNo;
+      }
       const s = mode === 3 ? carZoom : zoom;
       this.sphere.center.set(x, s, z);
       this.sphere.radius = 2.5 * s;
@@ -254,7 +258,7 @@ export class AgentsView {
       if (mode === 3) {
         const far = d2 > lodCars ? 1 : 0, k = n[4 + far]++;
         this.cars[far].setMatrixAt(k, this.m);
-        this.cars[far].setColorAt(k, this.carColors[id % this.carColors.length]);
+        this.cars[far].setColorAt(k, this.carColors[(id + (follower ? profile * 7 : 0)) % this.carColors.length]);
       } else if (mode === 2) {
         const far = d2 > lodPeople ? 1 : 0, k = n[2 + far]++;
         this.cyclists[far].setMatrixAt(k, this.m);

@@ -11,7 +11,7 @@ import { ROAD_FLAGS } from "../shared/city";
 import { WaterMask } from "./water";
 import { EVENT_SPECS, isProcession, traitsOf, type EventProposal, type EventTraits } from "../shared/catalog";
 import { crowdSpot, venueLayout, type VenueLayout } from "./venue";
-import { VISITOR_POOL, type EventBilan } from "./protocol";
+import { TRANSIT_POOL, VISITOR_POOL, type EventBilan } from "./protocol";
 import { INCOME_MEDIAN as VISITOR_INCOME } from "./demographics";
 import { localCohortResponses, type CohortResponse, type CohortStat, type EventSummary } from "../shared/advisors";
 import { eventGeometry, pointAt, rollingClosure, type EventGeometry, type RoutePath } from "./eventGeometry";
@@ -126,6 +126,8 @@ export class Engine {
   outbox: EngineMessage[] = [];
   /** visiteurs extérieurs en réserve, mobilisés par les grands événements */
   readonly visitors: Agent[] = [];
+  /** véhicules qui traversent Annecy ou viennent livrer */
+  readonly transit: Agent[] = [];
   /** habitants et visiteurs : tous ceux qui se déplacent et s'affichent */
   readonly everyone: Agent[];
   /** grands rassemblements : lieu → aménagement (scène, zone du public) */
@@ -137,6 +139,7 @@ export class Engine {
   /** cortèges et courses : lieu de l'événement → parcours */
   private routeStays = new Map<Place, { ev: CityEvent; path: RoutePath }>();
   private closureKey = "";
+  private dangerKey = "";
   private closedRoads = new Set<number>();
   /** zones piétonnes actives (bonus pour les commerces) */
   private pedestrianZones: Scheduled[] = [];
@@ -181,7 +184,8 @@ export class Engine {
     ({ agents: this.agents, households: this.households } = createPopulation(this.places, opts.residents, opts.tourists, opts.commuters, this.rand));
     for (const a of this.agents) a.district = districtOf(a);
     this.createVisitors(VISITOR_POOL);
-    this.everyone = [...this.agents, ...this.visitors];
+    this.createTransit(TRANSIT_POOL);
+    this.everyone = [...this.agents, ...this.visitors, ...this.transit];
     const exits = this.places.list("exit");
     this.genevaExits = [...exits].sort((a, b) => a.z + a.x - (b.z + b.x)).slice(0, Math.max(1, Math.ceil(exits.length / 3)));
     const g = this.graph, nr = city.roads.length;
@@ -212,6 +216,7 @@ export class Engine {
     this.stats.clear();
     this.visitorTarget.clear();
     this.pendingReactions = [];
+    this.planTransit();
     for (const v of this.visitors) {
       v.plan = [{ place: v.home, until: 1800 }];
       v.step = 0;
@@ -266,6 +271,8 @@ export class Engine {
 
   /** L'habitant exprime une pensée (bulle au-dessus de sa tête, fil d'actualité). */
   private think(a: Agent, icon: string, text: string, chance = 1, voice?: string) {
+    // les véhicules de transit ne sont pas des habitants : pas de bulles
+    if (a.profile === "transit") return;
     if (this.minute - a.lastThought < THOUGHT_COOLDOWN || this.rand() > chance) return;
     a.lastThought = this.minute;
     this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute), ...(voice ? { voice } : {}) });
@@ -465,6 +472,64 @@ export class Engine {
       } as Agent;
       a.household = { id: -1 - i, kind: "touristes", home, members: [a], cars: byTrain ? 0 : 1, income: VISITOR_INCOME };
       this.visitors.push(a);
+    }
+  }
+
+  /** Véhicules de transit et de livraison : ils entrent par une route d'accès et ressortent par une autre. */
+  private createTransit(n: number) {
+    const exits = this.places.list("exit");
+    if (!exits.length) return;
+    const base = this.agents.length + this.visitors.length;
+    for (let i = 0; i < n; i++) {
+      const home = exits[Math.floor(this.rand() * exits.length)];
+      const a = {
+        ...this.visitors[0], id: base + i, name: i % 3 ? "Véhicule de transit" : "Livreur", profile: "transit", age: 40, csp: null,
+        home, exit: null, work: null, hasCar: true, plan: [{ place: home, until: 1800 }], habits: new Map(), thoughtLog: [],
+        x: home.x, z: home.z, needs: { energy: 1, social: 0.5, fun: 0.5 }, satisfaction: 0.6, usualMode: 3,
+      } as Agent;
+      a.household = { id: -100000 - i, kind: "touristes", home, members: [a], cars: 1, income: VISITOR_INCOME };
+      this.transit.push(a);
+    }
+  }
+
+  /**
+   * Programme de la journée des véhicules de transit : deux pointes (8 h et 17 h 30) pour la traversée,
+   * le matin pour les livraisons (3 arrêts dans les commerces). Moins de monde le week-end.
+   */
+  private planTransit() {
+    const exits = this.places.list("exit");
+    const dow = this.date.getDay(), weekend = dow === 0 || dow === 6;
+    const shops = [...this.places.list("shop"), ...this.places.list("food"), ...this.places.list("grocery")];
+    const peak = () => {
+      // mélange de deux gaussiennes et d'un fond diurne
+      const u = this.rand();
+      const g = () => (this.rand() + this.rand() + this.rand() - 1.5) * 60;
+      return u < 0.35 ? 8 * 60 + g() : u < 0.7 ? 17.5 * 60 + g() : 7 * 60 + this.rand() * 13 * 60;
+    };
+    for (const a of this.transit) {
+      a.step = 0;
+      a.trip = null;
+      a.tourMode = null;
+      a.x = a.home.x;
+      a.z = a.home.z;
+      a.travelMinutes = a.delayMinutes = a.spentToday = 0;
+      if (this.rand() < (weekend ? 0.55 : 0.1)) {
+        a.plan = [{ place: a.home, until: 1800 }];
+        continue;
+      }
+      if (a.name === "Livreur" && shops.length && !weekend) {
+        let t = 6 * 60 + this.rand() * 5 * 60;
+        a.plan = [{ place: a.home, until: t }];
+        for (let k = 0; k < 3; k++) a.plan.push({ place: shops[Math.floor(this.rand() * shops.length)], until: (t += 25 + this.rand() * 20) });
+        a.plan.push({ place: a.home, until: 1800 });
+        continue;
+      }
+      // traversée : vers une sortie éloignée, parfois retour le soir
+      let to = a.home;
+      for (let k = 0; k < 6 && Math.hypot(to.x - a.home.x, to.z - a.home.z) < 1500; k++) to = exits[Math.floor(this.rand() * exits.length)];
+      const t = Math.max(5 * 60, Math.min(22 * 60, peak()));
+      a.plan = [{ place: a.home, until: t }, { place: to, until: this.rand() < 0.4 ? Math.max(t + 60, 17 * 60 + this.rand() * 120) : 1800 }];
+      if (a.plan[1].until < 1800) a.plan.push({ place: a.home, until: 1800 });
     }
   }
 
@@ -719,6 +784,7 @@ export class Engine {
         if (head >= s.geo.path.length && place.x === ev.x) this.movePlace(place, s.geo.path.xs.at(-1)!, s.geo.path.zs.at(-1)!);
       } else for (const r of ev.closedRoads) set.add(r);
     }
+    this.applyDanger();
     const key = [...set].sort((a, b) => a - b).join(",");
     if (key === this.closureKey) return;
     this.closureKey = key;
@@ -727,6 +793,61 @@ export class Engine {
     for (let e = 0; e < g.to.length; e++) g.closed[e] = set.has(g.edgeRoad[e]) ? 1 : 0;
     g.updateCarCosts(true);
     this.rerouteBlocked();
+  }
+
+  /**
+   * Zones dangereuses en cours : plus personne n'y passe (tous modes, sauf si c'est la seule issue),
+   * et ceux qui s'y rendaient ou devaient la traverser changent de route sur-le-champ.
+   */
+  private applyDanger() {
+    const zones = this.dayPlan.events.filter((ev) => this.minute >= ev.start && this.minute < ev.end && (ev.traits?.danger ?? EVENT_SPECS[ev.kind].danger));
+    const key = zones.map((ev) => ev.id).join(",");
+    if (key === this.dangerKey) return;
+    this.dangerKey = key;
+    const g = this.graph;
+    const inside = (x: number, z: number) => zones.some((ev) => Math.hypot(x - ev.x, z - ev.z) < ev.radius);
+    const edges: number[] = [];
+    for (let a = 0; a < g.n; a++) {
+      const ina = inside(g.x[a], g.z[a]);
+      for (let e = g.offset[a]; e < g.offset[a + 1]; e++) if (ina || inside(g.x[g.to[e]], g.z[g.to[e]])) edges.push(e);
+    }
+    g.setAvoid(edges, 40);
+    if (!zones.length) return;
+    for (const a of this.everyone) {
+      const t = a.trip;
+      if (!t) continue;
+      const next = a.plan[a.step + 1];
+      const threat = zones.find((ev) => Math.hypot(next.place.x - ev.x, next.place.z - ev.z) < ev.radius);
+      if (threat && next.travel !== "run") {
+        // il se rendait dans la zone : demi-tour vers un lieu sûr
+        next.place = this.safePlace(a, threat, false);
+        if (this.splice(a, next.place)) this.think(a, "⚠️", "Demi-tour, il ne faut surtout pas aller par là !", 0.5);
+        continue;
+      }
+      let crosses = false;
+      for (let i = t.seg + 1; i < t.path.nodes.length && !crosses; i += 3) crosses = inside(g.x[t.path.nodes[i]], g.z[t.path.nodes[i]]);
+      if (crosses && this.splice(a, next.place)) this.think(a, "↪️", "Je fais un détour pour éviter la zone dangereuse.", 0.3);
+    }
+  }
+
+  /** Recalcule la fin du trajet en cours vers `dest`, en gardant l'arête où se trouve l'habitant. */
+  private splice(a: Agent, dest: Place): boolean {
+    const t = a.trip!, g = this.graph;
+    const node = t.mode === Mode.Car ? dest.car : t.mode === Mode.Bike ? dest.bike : dest.walk;
+    const detour = g.route(t.path.nodes[t.seg + 1], node, t.mode, true);
+    if (!detour) return false;
+    const nodes = new Int32Array(detour.nodes.length + 1);
+    nodes[0] = t.path.nodes[t.seg];
+    nodes.set(detour.nodes, 1);
+    const edges = new Int32Array(detour.edges.length + 1);
+    edges[0] = t.path.edges[t.seg];
+    edges.set(detour.edges, 1);
+    const cum = new Float32Array(nodes.length);
+    for (let i = 0; i < edges.length; i++) cum[i + 1] = cum[i] + g.len[edges[i]];
+    t.d -= t.path.cum[t.seg];
+    t.seg = 0;
+    t.path = { nodes, edges, cum, length: cum[edges.length] };
+    return true;
   }
 
   private movePlace(p: Place, x: number, z: number) {
@@ -750,21 +871,7 @@ export class Engine {
       let blocked = -1;
       for (let i = t.seg + 1; i < t.path.edges.length; i++) if (g.closed[t.path.edges[i]]) { blocked = i; break; }
       if (blocked < 0) continue;
-      const dest = t.path.nodes[t.path.nodes.length - 1];
-      const detour = g.route(t.path.nodes[t.seg + 1], dest, Mode.Car, true);
-      if (!detour) continue;
-      // arête en cours, puis la déviation
-      const nodes = new Int32Array(detour.nodes.length + 1);
-      nodes[0] = t.path.nodes[t.seg];
-      nodes.set(detour.nodes, 1);
-      const edges = new Int32Array(detour.edges.length + 1);
-      edges[0] = t.path.edges[t.seg];
-      edges.set(detour.edges, 1);
-      const cum = new Float32Array(nodes.length);
-      for (let i = 0; i < edges.length; i++) cum[i + 1] = cum[i] + g.len[edges[i]];
-      t.d -= t.path.cum[t.seg];
-      t.seg = 0;
-      t.path = { nodes, edges, cum, length: cum[edges.length] };
+      if (!this.splice(a, a.plan[a.step + 1].place)) continue;
       for (const s of closing) s.rerouted += AGENT_SCALE;
       const name = this.city.roads[g.edgeRoad[t.path.edges[0]]].name;
       this.think(a, "↪️", name ? `Route barrée, je contourne par ${name}.` : "Route barrée, je prends la déviation.", 0.25);
@@ -809,7 +916,8 @@ export class Engine {
         st.peak = Math.max(st.peak, participants);
         this.nuisance(st, s);
       }
-      const bilan = st && !active && !s.traits.danger ? this.bilan(st, s) : null;
+      // bilan de fréquentation : seulement pour un rassemblement (pas une fermeture ni un sinistre)
+      const bilan = st && !active && !s.traits.danger && ev.attraction > 0 ? this.bilan(st, s) : null;
       this.outbox.push({ type: "impact", impact: { sid: s.sid, title: ev.title, kind: ev.kind, minute: Math.round(this.minute), active, reference, before, now, rerouted: s.rerouted, participants, timeline: st?.timeline ?? [], bilan } });
       if (st && bilan && !st.bilanSent) {
         st.bilanSent = true;
@@ -944,6 +1052,7 @@ export class Engine {
     if (a.carpoolDay === this.day) return Mode.Car;
     // le visiteur venu en train marche depuis la gare (ou prend la navette) ; sinon il vient en voiture
     if (a.profile === "visiteur") return a.hasCar ? Mode.Car : Mode.Walk;
+    if (a.profile === "transit") return Mode.Car;
     if (a.profile === "frontalier" || a.profile === "pendulaire") {
       // sans voiture, le frontalier rejoint la gare à vélo ou à pied
       return a.hasCar ? Mode.Car : a.hasBike ? Mode.Bike : Mode.Walk;
@@ -953,11 +1062,15 @@ export class Engine {
     // utilités en « minutes équivalentes » (plus c'est bas, mieux c'est)
     const w = this.dayPlan.weather.kind;
     const wet = w === "pluie" || w === "neige";
-    const options: [Mode, number][] = [[Mode.Walk, (d / WALK_SPEED / 60) * (a.age > 70 ? 1.6 : 1) * (a.age < 11 ? 1.3 : 1) * (wet ? 1.4 : 1) + (d > 2500 ? 30 : 0)]];
-    if (a.hasBike && a.age >= 8) options.push([Mode.Bike, d / BIKE_SPEED / 60 + 4 / this.policy.bikeComfort + (wet ? 12 : 0) + (w === "neige" ? 20 : 0)]);
+    // la marche reste naturelle sous 800 m environ, puis devient vite pénible (enquêtes ménages-déplacements)
+    const walkMin = d / WALK_SPEED / 60;
+    const options: [Mode, number][] = [[Mode.Walk, walkMin * (1 + Math.max(0, d - 800) / 1200) * (a.age > 70 ? 1.6 : 1) * (a.age < 11 ? 1.3 : 1) * (wet ? 1.4 : 1) + (d > 2500 ? 30 : 0)]];
+    // le vélo demande un effort et un équipement : une minorité l'utilise au quotidien (~5 % à Annecy)
+    if (a.hasBike && a.age >= 8) options.push([Mode.Bike, d / BIKE_SPEED / 60 + 11 / this.policy.bikeComfort + (wet ? 15 : 0) + (w === "neige" ? 25 : 0)]);
     if (a.hasCar && a.age >= 18 && a.profile !== "enfant") {
       const parking = centre && to !== a.home ? this.policy.parkingPrice * 4 : 0; // 1 € ≈ 4 min de « valeur »
-      options.push([Mode.Car, (d / 8.5 / 60) * this.policy.carFriction + 6 + parking]);
+      // l'habitude compte : celui qui prend sa voiture tous les jours la reprend
+      options.push([Mode.Car, (d / 8.5 / 60) * this.policy.carFriction + 3 + parking - (a.usualMode === 3 ? 3 : 0)]);
     }
     if (a.profile === "touriste") options[0][1] *= 0.6;
     // préférences décidées pour son groupe face à un événement (1 point ≈ 12 min de « valeur »)
@@ -1169,7 +1282,7 @@ export class Engine {
     // événements qui finissent à minuit : bilan avant de tourner la page
     for (const st of this.stats.values()) {
       const s = st.ev.sid !== undefined ? this.scheduled.get(st.ev.sid) : undefined;
-      if (!s || st.bilanSent || s.traits.danger) continue;
+      if (!s || st.bilanSent || s.traits.danger || st.ev.attraction <= 0) continue;
       st.bilanSent = true;
       const bilan = this.bilan(st, s);
       this.outbox.push({ type: "bilanRequest", sid: s.sid, event: s.summary, bilan });
@@ -1232,11 +1345,16 @@ export class Engine {
       weather: this.dayPlan.weather,
       households: this.households.length,
       meanHouseholdSize: +(this.agents.length / Math.max(1, this.households.length)).toFixed(2),
-      events: this.dayPlan.events.map((e) => ({ kind: e.kind, title: e.title, visits: this.eventPlaces.get(e.id)!.visits * AGENT_SCALE })),
+      events: this.dayPlan.events.map((e) => ({
+        kind: e.kind, title: e.title, visits: this.eventPlaces.get(e.id)!.visits * AGENT_SCALE,
+        icon: e.traits?.icon ?? EVENT_SPECS[e.kind].icon, start: e.start, end: e.end, byPlayer: !!e.byPlayer, ...(e.sid !== undefined ? { sid: e.sid } : {}),
+      })),
     };
     this.graph.closed.fill(0);
     this.graph.updateCarCosts(true);
     this.closureKey = "";
+    if (this.dangerKey) this.graph.setAvoid([], 1);
+    this.dangerKey = "";
     this.closedRoads = new Set();
     this.prevLog = this.log;
     this.log = new DayLog();
@@ -1256,7 +1374,7 @@ export class Engine {
     const STRIDE = 6, g = this.graph;
     for (const a of this.everyone) {
       if ((n + 1) * STRIDE > out.length) break;
-      let mode = 0, x = a.x, z = a.z, heading = a.heading;
+      let mode = 0, x = a.x, z = a.z, heading = a.heading, extra = 0;
       if (a.trip) {
         mode = a.trip.style === "run" ? 4 : a.trip.style === "dog" ? 5 : a.trip.mode;
         const e = a.trip.path.edges[a.trip.seg];
@@ -1272,6 +1390,8 @@ export class Engine {
           x = ox;
           z = oz;
         }
+        // les voitures suivantes s'écrivent juste après celle-ci
+        if (mode === Mode.Car) extra = this.followers(a, out, n + 1);
       } else {
         const place = a.plan[a.step]?.place;
         if (!place || !OUTDOOR.has(place.kind)) continue;
@@ -1325,9 +1445,35 @@ export class Engine {
       out[o + 3] = mode;
       out[o + 4] = PROFILES.indexOf(a.profile);
       out[o + 5] = a.id;
-      n++;
+      n += 1 + extra;
     }
     return n;
+  }
+
+  /**
+   * Une voiture simulée en représente AGENT_SCALE : on dessine les autres en file derrière elle sur
+   * le même itinéraire, collées dans un bouchon, espacées quand ça roule. Profil 100 + k = voiture suiveuse.
+   */
+  private followers(a: Agent, out: Float32Array, start: number): number {
+    let n = start;
+    const t = a.trip!, g = this.graph, p = t.path;
+    const flow = this.roadFactor[g.edgeRoad[p.edges[t.seg]]];
+    const gap = 7 + 28 * flow;
+    let seg = t.seg;
+    for (let k = 1; k < AGENT_SCALE; k++) {
+      const d = t.d - k * gap;
+      if (d < 0 || (n + 1) * 6 > out.length) break;
+      while (seg > 0 && p.cum[seg] > d) seg--;
+      const e = p.edges[seg], n0 = p.nodes[seg], n1 = p.nodes[seg + 1];
+      const kk = (d - p.cum[seg]) / (g.len[e] || 1);
+      const heading = Math.atan2(g.x[n1] - g.x[n0], g.z[n1] - g.z[n0]);
+      const lat = this.city.roads[g.edgeRoad[e]].w / 4;
+      const x = g.x[n0] + (g.x[n1] - g.x[n0]) * kk - Math.cos(heading) * lat;
+      const z = g.z[n0] + (g.z[n1] - g.z[n0]) * kk + Math.sin(heading) * lat;
+      if (this.water.isWater(x, z)) continue;
+      out.set([x, z, heading, Mode.Car, 100 + k, a.id], n++ * 6);
+    }
+    return n - start;
   }
 
   /**

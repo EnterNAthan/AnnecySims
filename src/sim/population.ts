@@ -8,7 +8,7 @@ import {
   INCOME_FACTOR, INCOME_MEDIAN, PART_TIME_RATE, POVERTY_RATE, SINGLE_PARENT_MOTHER,
 } from "./demographics";
 
-export const PROFILES = ["salarie", "frontalier", "etudiant", "retraite", "commercant", "enfant", "chomeur", "inactif", "touriste", "pendulaire", "visiteur"] as const;
+export const PROFILES = ["salarie", "frontalier", "etudiant", "retraite", "commercant", "enfant", "chomeur", "inactif", "touriste", "pendulaire", "visiteur", "transit"] as const;
 export type Profile = (typeof PROFILES)[number];
 
 export const PROFILE_LABEL: Record<Profile, string> = {
@@ -23,6 +23,7 @@ export const PROFILE_LABEL: Record<Profile, string> = {
   touriste: "Touriste",
   pendulaire: "Pendulaire (vit hors zone)",
   visiteur: "Visiteur d'un jour (événement)",
+  transit: "Transit et livraisons",
 };
 
 export const PROFILE_COLOR: Record<Profile, string> = {
@@ -37,6 +38,7 @@ export const PROFILE_COLOR: Record<Profile, string> = {
   touriste: "#ef5d8a",
   pendulaire: "#6fd3d6",
   visiteur: "#ff7a45",
+  transit: "#8d99a6",
 };
 
 
@@ -334,7 +336,7 @@ interface Draft extends ShapePerson {
 
 const BIKE_SHARE: Record<Profile, number> = {
   salarie: 0.35, frontalier: 0.1, etudiant: 0.45, retraite: 0.2, commercant: 0.25, enfant: 0.3, chomeur: 0.25, inactif: 0.2,
-  touriste: 0.15, pendulaire: 0, visiteur: 0,
+  touriste: 0.15, pendulaire: 0, visiteur: 0, transit: 0,
 };
 const DOG_RATE: Partial<Record<Profile, number>> = { retraite: 0.3, salarie: 0.12, frontalier: 0.12, commercant: 0.12, etudiant: 0.12, chomeur: 0.12, inactif: 0.12 };
 
