@@ -1,0 +1,12 @@
+node_modules
+dist
+dist-server
+data
+mockups
+.env
+.env.*
+!.env.example
+.git
+.claude
+**/__pycache__
+*.log

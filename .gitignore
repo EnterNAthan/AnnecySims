@@ -4,3 +4,8 @@ data/osm-raw.json
 .env
 data/asset-cache/
 data/transit-raw.json
+data/interpret-cache.json
+dist-server
+
+# k8s secret with the Arkane API key
+helm/ane-sims/secret.yaml

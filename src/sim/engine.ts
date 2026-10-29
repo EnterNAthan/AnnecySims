@@ -455,7 +455,7 @@ export class Engine {
     s.cohorts = cohortStats(this.agents, affected, AGENT_SCALE, (a) => a.delayMinutes);
     this.scheduled.set(sid, s);
     if (firstDay === this.day) this.instantiate(s, firstStart, firstEnd);
-    this.outbox.push({ type: "cohortRequest", sid, event: s.summary, cohorts: s.cohorts });
+    this.outbox.push({ type: "cohortRequest", sid, event: s.summary, cohorts: s.cohorts, schedule: { day: firstDay, start: firstStart, end: firstEnd, lastDay: s.lastDay } });
     return sid;
   }
 

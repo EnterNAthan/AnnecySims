@@ -157,9 +157,17 @@ export interface Preview {
   radius: number;
 }
 
+/** Calendrier d'une décision : premier jour et horaires (minutes depuis minuit), dernier jour. */
+export interface EventSchedule {
+  day: number;
+  start: number;
+  end: number;
+  lastDay: number;
+}
+
 /** Messages produits par le moteur, relayés tels quels par le worker. */
 export type EngineMessage =
-  | { type: "cohortRequest"; sid: number; event: EventSummary; cohorts: CohortStat[] }
+  | { type: "cohortRequest"; sid: number; event: EventSummary; cohorts: CohortStat[]; schedule: EventSchedule }
   | { type: "analysisRequest"; sid: number; event: EventSummary; before: Kpis; after: Kpis; reference: string }
   | { type: "impact"; impact: Impact }
   | { type: "bilanRequest"; sid: number; event: EventSummary; bilan: EventBilan }

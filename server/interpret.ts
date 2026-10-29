@@ -1,6 +1,6 @@
 // Endpoints IA : interprétation des commandes, réactions des groupes d'habitants, analyse d'impact.
-// Claude est appelé via Claude Code (`claude -p`) ; sans lui, on retombe sur des règles.
-import { readFileSync } from "node:fs";
+// Le LLM est appelé via Arkane (server/llm.ts) ; sans lui, on retombe sur des règles.
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { EFFECTS, EVENT_KINDS, EVENT_SPECS, MOTIONS, NATURES, PLACEMENTS, PROPS, PROP_LABEL, SHAPES, type EventProposal } from "../src/shared/catalog";
 import { assetCatalog, findAsset } from "./assets";
@@ -8,7 +8,7 @@ import { LOCATIONS } from "../src/shared/locations";
 import { DEFAULT_ROUTE, interpretLocally } from "../src/shared/localInterpreter";
 import { matchStreet, streetNames } from "../src/shared/streets";
 import { localAnalysis, localCohortResponses, type Analysis, type CohortResponse, type CohortStat, type EventSummary, type Kpis } from "../src/shared/advisors";
-import { askClaude } from "./claudeCode";
+import { askLlm } from "./llm";
 import type { City } from "../src/shared/city";
 
 const LOCATION_NAMES = LOCATIONS.map((l) => l.name);
@@ -130,14 +130,67 @@ function resolveNames(p: EventProposal): EventProposal {
   };
 }
 
-export async function interpret(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
+// Cache disque des interprétations de Claude : une demande déjà vue (suggestions, démo) répond instantanément.
+const CACHE_FILE = "data/interpret-cache.json";
+/** proposition, et heure de la simulation (minutes) au moment où Claude l'a interprétée */
+type Cached = { p: EventProposal; at: number };
+let cache: Record<string, Cached> | null = null;
+const loadCache = () => (cache ??= existsSync(CACHE_FILE) ? JSON.parse(readFileSync(CACHE_FILE, "utf8")) : {});
+const cacheKey = (text: string, extreme: boolean) => `${extreme ? "x" : "n"}:${text.trim().toLowerCase().replace(/\s+/g, " ")}`;
+const minutes = (hhmm: string) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+/** interprétations en cours : une même demande n'appelle Claude qu'une fois */
+const inflight = new Map<string, Promise<EventProposal | { error: string }>>();
+
+/** Une heure de début déjà passée garde le même délai qu'à l'interprétation (« dans une heure »). */
+function replay({ p, at }: Cached, time: string): EventProposal {
+  const now = minutes(time), start = minutes(p.startTime);
+  if (now === null || start === null || p.dayOffset > 0 || start > now) return { ...p, cached: true };
+  const shifted = Math.min(23 * 60 + 50, now + Math.max(0, start - at));
+  return { ...p, startTime: hhmm(shifted), cached: true };
+}
+
+export function interpret(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
+  const key = cacheKey(text, extreme);
+  const hit = loadCache()[key];
+  if (hit?.p) return Promise.resolve(replay(hit, context.time));
+  let job = inflight.get(key);
+  if (!job) {
+    job = interpretWithClaude(text, context, extreme).then((out) => {
+      if (!("error" in out) && out.source === "claude") {
+        loadCache()[key] = { p: out, at: minutes(context.time) ?? 0 };
+        try {
+          writeFileSync(CACHE_FILE, JSON.stringify(cache));
+        } catch {
+          /* cache facultatif */
+        }
+      }
+      return out;
+    }).finally(() => inflight.delete(key));
+    inflight.set(key, job);
+  }
+  return job;
+}
+
+/** Préchauffe le cache avec les suggestions, une à la fois pour laisser la place aux demandes du joueur. */
+let warming = Promise.resolve();
+export function warm(texts: string[], context: { time: string; weather: string }, extreme: boolean) {
+  const todo = texts.filter((t) => !loadCache()[cacheKey(t, extreme)]);
+  for (const t of todo) warming = warming.then(() => interpret(t, context, extreme)).then(() => {}, () => {});
+  return Promise.resolve({ queued: todo.length });
+}
+
+async function interpretWithClaude(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
   try {
-    const out = await askClaude(interpretSystem(extreme), `Heure actuelle : ${context.time}. Météo : ${context.weather}.\nDemande : « ${text} »`, proposalSchema(extreme));
+    const out = await askLlm(interpretSystem(extreme), `Heure actuelle : ${context.time}. Météo : ${context.weather}.\nDemande : « ${text} »`, proposalSchema(extreme));
     if (!out.understood) return { error: out.note || "Ça ne ressemble pas à un événement pour la ville." };
     const { understood: _, ...p } = out;
     return resolveNames({ ...(p as Omit<EventProposal, "source">), intensity: p.intensity as 1 | 2 | 3, source: "claude" });
   } catch (err) {
-    console.warn("[interpret] Claude Code indisponible :", (err as Error).message);
+    console.warn("[interpret] LLM indisponible :", (err as Error).message);
     const local = interpretLocally(text, allStreets(), extreme);
     return local ?? { error: "Je n'ai pas reconnu la demande. Exemple : « ferme l'avenue de Genève pour travaux pendant 2 semaines »." };
   }
@@ -176,7 +229,7 @@ Pour une manifestation, la participation dépend du motif : quelques pourcents p
 
 export async function cohortResponses(ev: EventSummary, cohorts: CohortStat[]): Promise<{ responses: CohortResponse[]; source: "claude" | "local" }> {
   try {
-    const out = await askClaude(COHORT_SYSTEM, JSON.stringify({ evenement: ev, groupes: cohorts }), CohortSchema);
+    const out = await askLlm(COHORT_SYSTEM, JSON.stringify({ evenement: ev, groupes: cohorts }), CohortSchema);
     const ids = new Set(cohorts.map((c) => c.id));
     const responses = out.responses.filter((r) => ids.has(r.id));
     if (!responses.length) throw new Error("aucune réponse exploitable");
@@ -201,7 +254,7 @@ const ANALYSIS_SYSTEM = `Tu es l'analyste mobilité et économie de la ville d'A
 
 export async function analyze(ev: EventSummary, before: Kpis, after: Kpis, cohorts: CohortStat[], responses: CohortResponse[]): Promise<Analysis> {
   try {
-    const out = await askClaude(ANALYSIS_SYSTEM, JSON.stringify({ evenement: ev, avant: before, pendant: after, groupes: cohorts, reactions: responses }), AnalysisSchema);
+    const out = await askLlm(ANALYSIS_SYSTEM, JSON.stringify({ evenement: ev, avant: before, pendant: after, groupes: cohorts, reactions: responses }), AnalysisSchema);
     return { ...out, source: "claude" };
   } catch (err) {
     console.warn("[analyse] repli sur les règles :", (err as Error).message);
@@ -225,7 +278,7 @@ const BILAN_SYSTEM = `Tu es le service événementiel de la ville d'Annecy. À p
 
 export async function finalReport(ev: EventSummary, bilan: Record<string, number>): Promise<FinalReport> {
   try {
-    const out = await askClaude(BILAN_SYSTEM, JSON.stringify({ evenement: ev, bilan }), BilanSchema);
+    const out = await askLlm(BILAN_SYSTEM, JSON.stringify({ evenement: ev, bilan }), BilanSchema);
     return { ...out, source: "claude" };
   } catch (err) {
     console.warn("[bilan] repli sur les règles :", (err as Error).message);

@@ -4,13 +4,15 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && vite build",
+    "build:server": "esbuild server/main.ts --bundle --platform=node --format=esm --target=node20 --outfile=dist-server/main.mjs",
+    "start": "node dist-server/main.mjs",
     "preview": "vite preview",
     "fetch-osm": "tsx scripts/fetch-osm.ts",
     "build-city": "tsx scripts/build-city.ts",
     "typecheck": "tsc",
     "sim:headless": "tsx scripts/sim-headless.ts"
   },
-  "description": "Simulation d'Annecy : habitants, maire et narrateur pilotés par Claude",
+  "description": "Simulation d'Annecy : habitants, maire et narrateur pilotés par un LLM (Arkane)",
   "dependencies": {
     "three": "^0.169.0",
     "zod": "^4.6.7"

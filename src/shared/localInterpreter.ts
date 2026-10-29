@@ -1,5 +1,5 @@
 // Interprète de secours, sans IA : mots-clés → action la plus proche du catalogue.
-// Utilisé quand Claude Code n'est pas disponible ou que l'appel échoue.
+// Utilisé quand le LLM n’est pas disponible ou que l'appel échoue.
 import { defaultParams, EVENT_KINDS, EVENT_SPECS, type AssetPlacement, type EventKind, type EventModel, type EventProposal } from "./catalog";
 
 /** Sans Claude, une menace inconnue (créature, attaque…) est traitée comme un danger, jamais comme une fête. */
@@ -102,7 +102,7 @@ export function interpretLocally(text: string, streetNames: string[], extreme: b
     title: `${params.label || spec.label} — ${where}`,
     description: spec.about,
     question: `${spec.icon} ${spec.label} : ${where}${days > 1 ? ` pendant ${days} jours` : ""}. On lance ?`,
-    note: spec.needs === "streets" && !streets.length ? "Aucune rue reconnue : précise le nom exact." : "Interprété par mots-clés (Claude Code indisponible).",
+    note: spec.needs === "streets" && !streets.length ? "Aucune rue reconnue : précise le nom exact." : "Interprété par mots-clés (LLM indisponible).",
     source: "local",
   };
 }

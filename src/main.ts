@@ -1,5 +1,6 @@
 import "./style.css";
 import "./theme.css";
+import "./focus.css";
 import * as THREE from "three";
 import type { City } from "./shared/city";
 import { World } from "./render/scene";
@@ -17,6 +18,8 @@ import { TransitView } from "./render/transit";
 import { MarcStory } from "./render/marc";
 import type { Transit } from "./shared/city";
 import { SimClock } from "./sim/clock";
+import { streetNames } from "./shared/streets";
+import { interpretLocally } from "./shared/localInterpreter";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
 import { PROFILES, PROFILE_COLOR, PROFILE_LABEL } from "./sim/population";
 import { VISITOR_POOL, TRANSIT_POOL, FRAME_CAPACITY_FACTOR, FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type Thought, type ToWorker } from "./sim/protocol";
@@ -27,17 +30,23 @@ const pct = (v: number) => `${Math.round(v * 100)} %`;
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 10000);
+  // ≈ 52 000 habitants dans la zone (Annecy et Annecy-le-Vieux), 1 habitant simulé pour 4
+  const residents = Number(params.get("pop") ?? 13000);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
   const tourists = Math.round(residents * 0.04);
   // actifs qui viennent travailler à Annecy depuis les communes voisines (≈ la moitié des emplois du centre)
-  const commuters = Math.round(residents * 0.35);
+  const commuters = Math.round(residents * 0.28);
   const startDate = new Date();
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
   const send = (msg: ToWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);
+  // le premier plan du jour arrive avant que la page n'écoute le worker : on le garde de côté
+  let firstPlan: DayPlan | null = null;
   const ready = new Promise<void>((resolve) => {
-    worker.addEventListener("message", (e: MessageEvent<FromWorker>) => e.data.type === "ready" && resolve(), { once: true });
+    worker.addEventListener("message", (e: MessageEvent<FromWorker>) => {
+      if (e.data.type === "ready") resolve();
+      else if (e.data.type === "dayStart") firstPlan = e.data.plan;
+    });
   });
   send({ type: "init", residents, tourists, commuters, seed: 2026, startDate: startDate.toISOString() });
 
@@ -70,6 +79,13 @@ async function main() {
   busBtn.onclick = () => {
     busBtn.classList.toggle("active");
     transit.showLines = busBtn.classList.contains("active");
+    // les pastilles des parkings ne s'affichent qu'avec la couche transports
+    document.body.classList.toggle("show-transit", transit.showLines);
+  };
+  const parkBtn = $<HTMLButtonElement>("#parkings");
+  parkBtn.onclick = () => {
+    parkBtn.classList.toggle("active");
+    transit.showParkings = parkBtn.classList.contains("active");
   };
   const preview = new PreviewLayer(city);
   world.scene.add(traffic.mesh, preview.group);
@@ -82,7 +98,7 @@ async function main() {
   // Marc part au travail : l'histoire commence à 7 h 58
   const clock = new SimClock(startDate, params.has("h") ? Number(params.get("h")) * 60 : 7 * 60 + 58);
   if (params.has("paused")) clock.paused = true;
-  setupControls(clock, agents);
+  const speedUi = setupControls(clock, agents);
   const intro = !params.has("nointro");
   // présentation : après l'ouverture, la ville et la barre de réglages, sans les panneaux (bouton ◐ ou touche H pour les afficher)
   if (intro) document.body.classList.add("presenting");
@@ -92,8 +108,8 @@ async function main() {
     marc.startIntro(
       () => {
         clock.paused = params.has("paused");
-        $<HTMLButtonElement>('[data-speed="realtime"]').click();
-        $<HTMLButtonElement>("#play").textContent = clock.paused ? "▶" : "❚❚";
+        clock.realtime = true;
+        speedUi.sync();
       },
       () => {},
     );
@@ -114,6 +130,7 @@ async function main() {
     selected = id;
     follow = true;
     info = null;
+    document.body.classList.toggle("agent-open", id >= 0);
     if (id >= 0) send({ type: "inspect", id });
     else {
       $("#agent").classList.add("hidden");
@@ -194,7 +211,8 @@ async function main() {
     follow = false;
     world.flyTo = new THREE.Vector3(x, 0, z);
   };
-  setupCommandBar(
+  const streets = streetNames(city);
+  const command = setupCommandBar(
     {
       time: () => clock.label().split(" · ").pop()!,
       weather: () => (currentPlan ? `${currentPlan.weather.kind}, ${currentPlan.weather.tempC} °C` : "inconnue"),
@@ -202,29 +220,86 @@ async function main() {
         send({ type: "preview", proposal });
         if (!proposal) preview.set(null);
       },
+      local: (text, extreme) => interpretLocally(text, streets, extreme),
     },
     (proposal) => send({ type: "addEvent", proposal }),
   );
+
+  // --- avance rapide : l'horloge file aussi vite que le moteur suit, jusqu'à l'heure visée ---
+  /** où en est le moteur (dernière trame reçue), en minutes depuis le début */
+  let workerAt = 0;
+  let ff: { target: number; from: number; label: string; speed: number; realtime: boolean } | null = null;
+  const FF_SPEED = 14;
+  /** avance maximale de l'horloge sur le moteur : au-delà, la ville saccade */
+  const FF_LEAD = 8;
+  const ffEl = $("#ff");
+  const stopFastForward = () => {
+    if (!ff) return;
+    clock.speed = ff.speed;
+    clock.realtime = ff.realtime;
+    ff = null;
+    ffEl.classList.add("hidden");
+    speedUi.sync();
+  };
+  const skipTo = (day: number, minute: number, label: string) => {
+    const target = day * 1440 + minute, now = clock.day * 1440 + clock.minute;
+    if (target <= now + 1) return;
+    if (!ff) ff = { target, from: now, label, speed: clock.speed, realtime: clock.realtime };
+    else Object.assign(ff, { target, label });
+    clock.paused = false;
+    clock.realtime = false;
+    clock.speed = FF_SPEED;
+    speedUi.sync();
+    ffEl.classList.remove("hidden");
+  };
+  ffEl.addEventListener("click", (e) => (e.target as HTMLElement).dataset.act === "stop" && stopFastForward());
+  const updateFastForward = () => {
+    if (!ff) return;
+    const now = clock.day * 1440 + clock.minute;
+    if (now >= ff.target) return stopFastForward();
+    // l'horloge n'avance pas plus vite que la simulation
+    if (now > workerAt + FF_LEAD) {
+      const t = workerAt + FF_LEAD;
+      clock.day = Math.floor(t / 1440);
+      clock.minute = t % 1440;
+    }
+    const p = Math.max(0, Math.min(1, (now - ff.from) / (ff.target - ff.from)));
+    ffEl.innerHTML = `<span>⏩</span><div><b>Avance rapide</b><small>jusqu'au ${ff.label}</small><i style="--p:${(p * 100).toFixed(1)}%"></i></div><button data-act="stop" title="Arrêter l'avance rapide">✕</button>`;
+  };
+
   const decisions = new DecisionsPanel({
+    skipTo,
+    newDecision: () => {
+      decisions.focus(-1);
+      command.focus();
+    },
     cohortPlan: (sid, responses) => send({ type: "cohortPlan", sid, responses }),
     cancel: (sid) => send({ type: "cancelEvent", sid }),
     goTo: (sid) => {
       const ev = currentPlan?.events.find((e) => e.sid === sid);
       if (ev) lookAt(ev.x, ev.z);
     },
-    follow: (sid) => {
-      followedEvent = sid;
-      const ev = currentPlan?.events.find((e) => e.sid === sid);
-      if (!ev) return;
-      lookAt(ev.x, ev.z);
-      // vue rapprochée en plongée sur le site
-      world.camera.position.set(ev.x - 260, 230, ev.z + 300);
-    },
+    follow: (sid) => followEvent(sid),
   });
+  /** Caméra en plongée sur le site d'une décision ; si elle n'est pas encore au programme, dès son jour. */
+  function followEvent(sid: number) {
+    const ev = currentPlan?.events.find((e) => e.sid === sid);
+    pendingFollow = ev ? -1 : sid;
+    if (!ev) return;
+    followedEvent = sid;
+    lookAt(ev.x, ev.z);
+    world.camera.position.set(ev.x - 260, 230, ev.z + 300);
+  }
   const history = new HistoryPanel(decisions, dayReportHtml);
+  // la carte des événements du jour ouvre le compte rendu d'une décision
+  const openEvent = (sid: number | undefined, x: number, z: number) => {
+    if (sid !== undefined && decisions.all().some((d) => d.sid === sid && !d.auto)) decisions.focus(sid);
+    follow = false;
+    world.flyTo = new THREE.Vector3(x, 0, z);
+  };
   /** événement suivi par la caméra (jusqu'à ce que l'on déplace la carte) */
-  let followedEvent = -1;
-  world.controls.addEventListener("start", () => (followedEvent = -1));
+  let followedEvent = -1, pendingFollow = -1;
+  world.controls.addEventListener("start", () => (followedEvent = pendingFollow = -1));
 
   // Échange de trames avec le worker : la trame est copiée avant que le buffer reparte.
   let buffer: ArrayBuffer | null = new ArrayBuffer(total * FRAME_CAPACITY_FACTOR * FRAME_STRIDE * 4);
@@ -234,6 +309,7 @@ async function main() {
     const msg = e.data;
     if (msg.type === "frame") {
       frame.set(new Float32Array(msg.buffer, 0, msg.count * FRAME_STRIDE));
+      workerAt = msg.day * 1440 + msg.minute;
       buffer = msg.buffer;
       frameCount = msg.count;
       renderCounts(msg.counts);
@@ -244,25 +320,20 @@ async function main() {
         renderFeed(feed);
       }
     } else if (msg.type === "day") {
-      renderReport(msg.report);
+      dayToast(msg.report, () => history.openDay(msg.report.day));
       history.addDay(msg.report);
     }
     else if (msg.type === "dayStart") {
       currentPlan = msg.plan;
+      if (pendingFollow >= 0) followEvent(pendingFollow);
       events.setPlan(msg.plan);
       world.setWeather(msg.plan.weather.kind);
-      renderToday(msg.plan, (x, z) => {
-        follow = false;
-        world.flyTo = new THREE.Vector3(x, 0, z);
-      });
+      renderToday(msg.plan, openEvent);
     } else if (msg.type === "planUpdate") {
       currentPlan = msg.plan;
       events.setPlan(msg.plan);
       world.setWeather(msg.plan.weather.kind);
-      renderToday(msg.plan, (x, z) => {
-        follow = false;
-        world.flyTo = new THREE.Vector3(x, 0, z);
-      });
+      renderToday(msg.plan, openEvent);
     } else if (msg.type === "agent" && msg.info && msg.info.id === selected) {
       info = msg.info;
       renderAgent(info, follow);
@@ -274,10 +345,11 @@ async function main() {
       transit.setParking(msg.parking);
     } else if (msg.type === "transit") transit.setLines(msg.lines);
     else if (msg.type === "cohortRequest") {
-      decisions.request(msg.sid, msg.event, msg.cohorts, clock.day);
-      followedEvent = -1;
-      const ev = currentPlan?.events.find((e) => e.sid === msg.sid);
-      if (ev) lookAt(ev.x, ev.z);
+      decisions.request(msg.sid, msg.event, msg.cohorts, clock.day, msg.schedule);
+      // la caméra rejoint le site ; si l'événement est pour plus tard, on y va en avance rapide
+      followEvent(msg.sid);
+      const wait = msg.schedule.day * 1440 + msg.schedule.start - (clock.day * 1440 + clock.minute);
+      if (wait > 20) skipTo(msg.schedule.day, msg.schedule.start, `début · ${hhmm(msg.schedule.start)}`);
     } else if (msg.type === "impact") {
       decisions.impact(msg.impact);
       events.setPresence(msg.impact.sid, msg.impact.active ? msg.impact.participants : 0);
@@ -286,11 +358,17 @@ async function main() {
     else if (msg.type === "analysisRequest") decisions.analyse(msg.sid, msg.before, msg.after);
   };
 
-  let last = performance.now();
+  if (firstPlan) worker.onmessage(new MessageEvent("message", { data: { type: "dayStart", day: 1, plan: firstPlan } }));
+  let last = performance.now(), lastPanelTick = 0;
   const loop = (now: number) => {
     const dt = Math.min(0.1, (now - last) / 1000);
     last = now;
     clock.tick(dt);
+    updateFastForward();
+    if (now - lastPanelTick > 400) {
+      lastPanelTick = now;
+      decisions.tick(clock.day, clock.minute);
+    }
     if (buffer) {
       const b = buffer;
       buffer = null;
@@ -349,13 +427,28 @@ function setupControls(clock: SimClock, agents: AgentsView) {
     syncPlay();
   };
   syncPlay();
+  /** reflète la vitesse de l'horloge sur les boutons (aucun pendant l'avance rapide) */
+  const sync = () => {
+    syncPlay();
+    document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach((b) =>
+      b.classList.toggle("active", clock.realtime ? b.dataset.speed === "realtime" : !clock.realtime && Number(b.dataset.speed) === clock.speed));
+  };
   document.querySelectorAll<HTMLButtonElement>("[data-speed]").forEach((btn) => {
     btn.onclick = () => {
       clock.realtime = btn.dataset.speed === "realtime";
       if (!clock.realtime) clock.speed = Number(btn.dataset.speed);
-      document.querySelectorAll("[data-speed]").forEach((b) => b.classList.toggle("active", b === btn));
+      sync();
     };
   });
+  // réglages d'affichage regroupés derrière ⚙
+  const menu = $("#display-menu");
+  $("#display-open").onclick = (e) => {
+    e.stopPropagation();
+    menu.classList.toggle("hidden");
+  };
+  document.addEventListener("click", (e) => !menu.contains(e.target as Node) && menu.classList.add("hidden"));
+  $<HTMLInputElement>("#show-counts").onchange = (e) => $("#live").classList.toggle("hidden", !(e.target as HTMLInputElement).checked);
+  $<HTMLInputElement>("#show-feed").onchange = (e) => document.body.classList.toggle("hide-feed", !(e.target as HTMLInputElement).checked);
   $<HTMLInputElement>("#labels").onchange = (e) => {
     document.body.classList.toggle("hide-labels", !(e.target as HTMLInputElement).checked);
   };
@@ -370,6 +463,7 @@ function setupControls(clock: SimClock, agents: AgentsView) {
   window.addEventListener("keydown", (e) => {
     if (e.key === "h" && !(e.target instanceof HTMLInputElement)) zen();
   });
+  return { sync };
 }
 
 /** Sélecteur « Verre / Réaliste » de la vue 3D, mémorisé dans le navigateur (?view=realiste pour forcer). */
@@ -410,15 +504,19 @@ function renderFeed(feed: Thought[]) {
     feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}${th.about && !th.voice ? ` <small class="about-tag">${th.about}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
 }
 
-function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {
+/** Programme du jour : les décisions du joueur d'abord, la vie courante de la ville repliée. */
+function renderToday(plan: DayPlan, open: (sid: number | undefined, x: number, z: number) => void) {
   const w = plan.weather;
   $("#weather").textContent = `${WEATHER_ICON[w.kind]} ${w.tempC} °C`;
+  const row = (ev: DayPlan["events"][number]) =>
+    `<button class="event-row${ev.byPlayer ? " player" : ""}" data-x="${ev.x}" data-z="${ev.z}"${ev.byPlayer && ev.sid !== undefined ? ` data-sid="${ev.sid}"` : ""} title="${ev.description}">${ev.traits?.icon ?? EVENT_ICON[ev.kind]} <b>${ev.title}</b><small>${ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small></button>`;
+  const mine = plan.events.filter((ev) => ev.byPlayer), city = plan.events.filter((ev) => !ev.byPlayer);
   const el = $("#today");
-  el.innerHTML = `<div class="panel-title">Aujourd'hui · ${WEATHER_ICON[w.kind]} ${w.kind}, ${w.tempC} °C</div>` +
-    (plan.events.length
-      ? plan.events.map((ev) => `<button class="event-row${ev.byPlayer ? " player" : ""}" data-x="${ev.x}" data-z="${ev.z}" title="${ev.description}">${ev.traits?.icon ?? EVENT_ICON[ev.kind]} <b>${ev.title}</b><small>${ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small></button>`).join("")
-      : `<div class="muted">Journée calme, aucun événement.</div>`);
-  el.querySelectorAll<HTMLButtonElement>(".event-row").forEach((b) => (b.onclick = () => goTo(Number(b.dataset.x), Number(b.dataset.z))));
+  const wasOpen = el.querySelector("details")?.open ?? false;
+  el.innerHTML = `<div class="panel-title">Aujourd'hui</div>` +
+    (mine.length ? mine.map(row).join("") : `<div class="muted small">Aucune décision. Tapez-en une en bas de l'écran.</div>`) +
+    (city.length ? `<details class="city-events"${wasOpen ? " open" : ""}><summary>Vie de la ville · ${city.length} événement${city.length > 1 ? "s" : ""}</summary>${city.map(row).join("")}</details>` : "");
+  el.querySelectorAll<HTMLButtonElement>(".event-row").forEach((b) => (b.onclick = () => open(b.dataset.sid ? Number(b.dataset.sid) : undefined, Number(b.dataset.x), Number(b.dataset.z))));
 }
 
 function renderAgent(a: AgentInfo, following: boolean) {
@@ -448,14 +546,17 @@ const KIND_LABEL: Record<string, string> = {
   food: "Restaurants", bar: "Bars", grocery: "Alimentation", shop: "Commerces", culture: "Culture", sport: "Sport", lake: "Lac", event: "Événements",
 };
 
-function renderReport(r: DayReport) {
-  const el = $("#report");
+/** Fin de journée : une notification discrète, le bilan complet est dans l'historique. */
+function dayToast(r: DayReport, open: () => void) {
+  const el = $("#toast");
+  el.innerHTML = `<span>📅</span><div><b>Bilan du jour ${r.day}</b><small>satisfaction ${pct(r.satisfaction)} · ${fmt(r.revenueTotal / 1000)} k€ · ${r.co2Tonnes} t CO₂</small></div><button>Voir</button>`;
   el.classList.remove("hidden");
-  el.innerHTML = `
-    <details ${el.querySelector("details")?.open ? "open" : ""}>
-    <summary class="panel-title">Bilan du jour ${r.day} · ${new Date(r.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</summary>
-    ${dayReportHtml(r)}
-    </details>`;
+  el.querySelector("button")!.onclick = () => {
+    el.classList.add("hidden");
+    open();
+  };
+  clearTimeout(Number(el.dataset.timer));
+  el.dataset.timer = String(setTimeout(() => el.classList.add("hidden"), 9000));
 }
 
 /** Contenu d'un bilan quotidien (panneau et historique). */
