@@ -1380,31 +1380,17 @@ body.intro .labels > :not(.marc-ui) {
   cursor: pointer;
 }
 
-#follow-marc {
-  position: fixed;
-  top: 66px;
-  right: 16px;
-  z-index: 10;
-  height: 40px;
-  padding: 0 16px;
+#settings > #follow-marc {
   border: 2px solid rgba(255, 90, 60, 0.7);
-  border-radius: 999px;
-  background: rgba(16, 22, 32, 0.85);
-  color: #fff;
-  font: 500 13px Inter, sans-serif;
-  cursor: pointer;
-  transition: opacity 1.2s ease, background 0.2s;
+  color: var(--text) !important;
 }
 
-#follow-marc:hover,
-#follow-marc.active {
+#settings > #follow-marc:hover,
+#settings > #follow-marc.active {
   background: #ff5a3c;
 }
 
-body.intro #follow-marc {
-  opacity: 0;
-  pointer-events: none;
-}
+
 
 body.presenting .panel,
 body.presenting #right,
