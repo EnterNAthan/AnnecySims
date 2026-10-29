@@ -195,7 +195,24 @@ body {
 
 #right .panel {
   position: static;
+  flex-shrink: 0;
 }
+
+#ai-log summary { cursor: pointer; }
+#ai-active { display: block; margin-top: 4px; color: var(--accent); font-size: 11px; font-weight: 400; }
+.ai-log-tools { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.ai-log-tools label { color: var(--muted); font-size: 11px; }
+.ai-log-tools select { max-width: 125px; color: var(--text); background: #182332; border: 1px solid #405064; border-radius: 5px; padding: 5px; }
+.ai-log-tools button { padding: 5px 8px; font-size: 11px; }
+.ai-log-tools button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
+.ai-log-hint, .ai-log-empty { font-size: 11px; color: var(--muted); }
+.ai-log-list { list-style: none; margin: 0; padding: 0; max-height: 32vh; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.ai-log-list li { border-top: 1px solid #ffffff16; border-left: 2px solid var(--accent); padding: 8px; margin-top: 6px; overflow-wrap: anywhere; }
+.ai-log-list li[data-kind="error"] { border-left-color: #ff8b8b; }
+.ai-log-list li[data-kind="conversation"] { border-left-color: #94dfb1; }
+.ai-log-meta { font-size: 10px; color: var(--muted); font-variant-numeric: tabular-nums; }
+.ai-log-list button { border: 0; background: transparent; padding: 3px 0; color: var(--text); font-size: 12px; font-weight: 600; text-align: left; }
+.ai-log-list p { margin: 2px 0 0; font-size: 12px; line-height: 1.5; white-space: pre-wrap; }
 
 #report summary {
   cursor: pointer;

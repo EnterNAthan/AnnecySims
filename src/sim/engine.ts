@@ -13,7 +13,7 @@ import { EVENT_SPECS, type EventProposal } from "../shared/catalog";
 import { locationXZ } from "../shared/locations";
 
 /** Un agent simulé représente ce nombre de personnes réelles (trafic, chiffre d'affaires, CO₂). */
-export const AGENT_SCALE = 4;
+export const AGENT_SCALE = 1;
 const RUN_SPEED = 2.8;
 /** une pensée au plus toutes les 90 minutes par habitant */
 const THOUGHT_COOLDOWN = 90;

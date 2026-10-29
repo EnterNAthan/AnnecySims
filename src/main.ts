@@ -17,13 +17,14 @@ import { FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type Liv
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const fmt = (n: number) => Math.round(n).toLocaleString("fr-FR");
 const pct = (v: number) => `${Math.round(v * 100)} %`;
+const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]!);
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 10000);
+  const residents = Number(params.get("pop") ?? 100);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
-  const tourists = Math.round(residents * 0.04);
-  const commuters = Math.round(residents * 0.12);
+  const tourists = 0;
+  const commuters = 0;
   const startDate = new Date();
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -45,6 +46,7 @@ async function main() {
   world.scene.add(agents.group, events.group);
 
   const clock = new SimClock(startDate, params.has("h") ? Number(params.get("h")) * 60 : 6 * 60);
+  clock.realtime = true;
   if (params.has("paused")) clock.paused = true;
   setupControls(clock, agents);
   renderLegend();
@@ -124,6 +126,7 @@ async function main() {
   let frameCount = 0;
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const msg = e.data;
+    if (msg.type === "aiLog") return;
     if (msg.type === "frame") {
       frame.set(new Float32Array(msg.buffer, 0, msg.count * FRAME_STRIDE));
       buffer = msg.buffer;
@@ -232,7 +235,7 @@ function renderCounts(c: LiveCounts) {
 
 function renderFeed(feed: Thought[]) {
   $("#feed").innerHTML = `<div class="panel-title">💬 Ce que disent les habitants</div>` +
-    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}<br><em>« ${th.text} »</em></div></div>`).join("");
+    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}<br><em>« ${escapeHtml(th.text)} »</em></div></div>`).join("");
 }
 
 function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {
@@ -259,10 +262,11 @@ function renderAgent(a: AgentInfo, following: boolean) {
     <div class="muted small">Foyer : ${a.household.kind} · ${a.household.cars} voiture${a.household.cars > 1 ? "s" : ""} · ~${a.monthlyIncome.toLocaleString("fr-FR")} €/mois par UC</div>
     ${a.household.members.length ? `<ul class="household">${a.household.members.map((m) => `<li data-id="${m.id}"><b>${m.name}</b> ${m.age} ans<span>${m.relation}</span></li>`).join("")}</ul>` : ""}
     <div class="now">${a.now}</div>
+    ${a.intelligence ? `<details><summary>Intelligence : ${escapeHtml(a.intelligence.status)}</summary><ul>${a.intelligence.memories.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul></details>` : ""}
     <div class="mind"><span>${a.mind.icon}</span><em>« ${a.mind.text} »</em></div>
     ${bar("Énergie", a.needs.energy)}${bar("Vie sociale", a.needs.social)}${bar("Loisirs", a.needs.fun)}${bar("Satisfaction", a.satisfaction)}
     <div class="muted small">${a.hasCar ? "🚗 voiture" : "pas de voiture"} · ${a.hasBike ? "🚲 vélo" : "pas de vélo"} · ${a.travelMinutes} min de trajet · ${a.spentToday} € dépensés</div>
-    ${a.thoughts.length ? `<div class="panel-title">Ses dernières pensées</div><ul class="thought-log">${a.thoughts.map((th) => `<li><span>${th.when}</span>${th.icon} ${th.text}</li>`).join("")}</ul>` : ""}
+    ${a.thoughts.length ? `<div class="panel-title">Ses dernières pensées</div><ul class="thought-log">${a.thoughts.map((th) => `<li><span>${th.when}</span>${th.icon} ${escapeHtml(th.text)}</li>`).join("")}</ul>` : ""}
     <div class="panel-title">Sa journée</div>
     <ol class="schedule">${a.schedule.map((s) => `<li class="${s.current ? "current" : s.done ? "done" : ""}"><span>${s.from}</span>${s.place}</li>`).join("")}</ol>
     ${following ? "" : `<button data-action="follow" class="wide">🎥 Suivre avec la caméra</button>`}

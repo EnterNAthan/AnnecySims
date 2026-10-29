@@ -1,5 +1,6 @@
 // Messages échangés entre la page et le worker de simulation.
 import type { Profile } from "./population";
+import type { AiLog } from "../shared/intelligence";
 import type { DayPlan, EventKind, Weather } from "./events";
 import type { EventProposal } from "../shared/catalog";
 
@@ -40,6 +41,7 @@ export interface DayReport {
 }
 
 export interface AgentInfo {
+  intelligence?: { status: string; memories: string[] };
   id: number;
   name: string;
   age: number;
@@ -99,6 +101,7 @@ export type ToWorker =
   | { type: "addEvent"; proposal: EventProposal };
 
 export type FromWorker =
+  | { type: "aiLog"; entry: AiLog }
   | { type: "ready"; agents: number; places: Record<string, number> }
   | { type: "frame"; buffer: ArrayBuffer; count: number; counts: LiveCounts; day: number; minute: number; thoughts: Thought[] }
   | { type: "day"; report: DayReport }

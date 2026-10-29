@@ -1,0 +1,40 @@
+:root { color-scheme: dark; font-family: system-ui, sans-serif; color: #e8edf2; background: #10151c; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+main { max-width: 1200px; margin: auto; padding: 36px 28px 80px; }
+header { display: flex; justify-content: space-between; align-items: center; gap: 24px; }
+a { color: #9fcfee; text-decoration: none; }
+a:hover { text-decoration: underline; }
+.eyebrow { font-size: 11px; letter-spacing: .12em; color: #8ea1b5; margin-top: 30px; }
+h1 { font-size: clamp(26px, 4vw, 38px); letter-spacing: -.035em; margin: 10px 0; }
+#model, .notice, #summary { color: #9eacbb; font-size: 13px; line-height: 1.6; }
+#connection { font-size: 12px; color: #a9d7b7; }
+.notice { margin: 24px 0; }
+#metrics { display: grid; grid-template-columns: repeat(6, 1fr); border-block: 1px solid #2c3540; }
+#metrics div { padding: 22px 16px; border-right: 1px solid #2c3540; }
+#metrics div:last-child { border: 0; }
+#metrics span { display: block; font-size: 12px; color: #a4b0be; }
+#metrics strong { display: block; font-size: 28px; margin-top: 10px; font-variant-numeric: tabular-nums; }
+.journal { margin-top: 38px; }
+.toolbar { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
+h2 { font-size: 18px; margin-right: auto; }
+label { font-size: 12px; color: #a4b0be; }
+select, input, button { font: inherit; color: #e8edf2; background: #1b232d; border: 1px solid #3a4654; border-radius: 5px; padding: 9px; }
+input { max-width: 220px; }
+button, summary { cursor: pointer; }
+button:hover { background: #2a3644; }
+button[aria-pressed="true"] { border-color: #9fcfee; }
+:focus-visible { outline: 2px solid #9fcfee; outline-offset: 3px; }
+article { margin-top: 12px; padding: 18px 22px; background: #171e27; border-left: 3px solid #82b9a0; }
+article.error { border-color: #ef9292; }
+.call-head { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; font-size: 12px; color: #9eacbb; }
+.call-head strong { color: #e8edf2; font-size: 14px; margin-right: auto; }
+.status { color: #a9d7b7; font-variant-numeric: tabular-nums; }
+.error .status, .error-message { color: #ffb2b2; }
+article p, blockquote { font-size: 14px; line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.action, summary { color: #9eacbb; font-size: 12px; }
+blockquote { margin: 14px 0; padding-left: 16px; border-left: 1px solid #516879; color: #bcd8e8; }
+pre { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; line-height: 1.7; }
+details { margin-top: 16px; }
+.empty { padding: 40px 0; color: #9eacbb; }
+@media (max-width: 760px) { main { padding: 22px 16px; } header { align-items: flex-start; flex-direction: column; gap: 0; } #metrics { grid-template-columns: repeat(3, 1fr); } #metrics div { border-bottom: 1px solid #2c3540; } .toolbar label { display: flex; flex-direction: column; gap: 6px; } }

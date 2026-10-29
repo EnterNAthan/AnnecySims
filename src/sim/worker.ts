@@ -2,11 +2,13 @@
 // Worker de simulation : héberge le moteur et répond aux ticks de la page.
 import type { City } from "../shared/city";
 import { Engine } from "./engine";
+import { Intelligence } from "./intelligence";
 import type { FromWorker, ToWorker } from "./protocol";
 
 declare const self: DedicatedWorkerGlobalScope;
 
 let engine: Engine | null = null;
+let intelligence: Intelligence | null = null;
 const post = (msg: FromWorker, transfer: Transferable[] = []) => self.postMessage(msg, transfer);
 
 self.onmessage = async (ev: MessageEvent<ToWorker>) => {
@@ -14,6 +16,7 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   if (msg.type === "init") {
     const city: City = await fetch("/city.json").then((r) => r.json());
     engine = new Engine(city, { ...msg, startDate: new Date(msg.startDate) });
+    intelligence = new Intelligence(engine, (entry) => post({ type: "aiLog", entry }));
     const places: Record<string, number> = {};
     for (const [k, list] of engine.places.byKind) places[k] = list.length;
     post({ type: "ready", agents: engine.agents.length, places });
@@ -26,7 +29,9 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
     return;
   }
   if (msg.type === "inspect" && engine) {
-    post({ type: "agent", info: engine.inspect(msg.id) });
+    const info = engine.inspect(msg.id);
+    if (info) info.intelligence = intelligence?.inspect(msg.id);
+    post({ type: "agent", info });
     return;
   }
   if (msg.type === "tick" && engine) {
@@ -35,7 +40,9 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
       post({ type: "day", report: engine.endDay() });
       post({ type: "dayStart", day: engine.day, plan: engine.dayPlan });
     }
+    const advanced = msg.minute !== engine.minute;
     engine.advanceTo(msg.minute);
+    if (advanced) intelligence?.tick();
     const out = new Float32Array(msg.buffer);
     const count = engine.snapshot(out);
     const thoughts = engine.thoughts.slice(-40);
