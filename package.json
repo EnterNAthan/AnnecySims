@@ -10,11 +10,10 @@
     "typecheck": "tsc",
     "sim:headless": "tsx scripts/sim-headless.ts",
     "bench:arkane": "tsx scripts/bench-arkane.ts",
-    "test:ai": "tsx scripts/check-intelligence.ts && tsx scripts/check-batch.ts && tsx scripts/check-context.ts && tsx scripts/check-stability.ts && tsx scripts/check-provider.ts"
+    "test:ai": "tsx scripts/check-intelligence.ts && tsx scripts/check-batch.ts && tsx scripts/check-context.ts && tsx scripts/check-stability.ts && tsx scripts/check-provider.ts && tsx scripts/check-integration.ts"
   },
   "description": "Simulation d'Annecy : habitants, maire et narrateur pilotés par Claude",
   "dependencies": {
-    "@anthropic-ai/sdk": "^1.3.0",
     "three": "^0.169.0",
     "zod": "^4.6.7"
   },

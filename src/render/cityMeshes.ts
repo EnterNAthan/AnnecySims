@@ -163,7 +163,7 @@ export function buildBuildings(city: City) {
 
 // ---------- Rubans (rues, rivières, rail) ----------
 
-function ribbon(lines: { pts: Pt[]; w: number }[], y: number): THREE.BufferGeometry {
+export function ribbon(lines: { pts: Pt[]; w: number }[], y: number): THREE.BufferGeometry {
   const pos: number[] = [];
   for (const { pts, w } of lines) {
     if (pts.length < 2) continue;

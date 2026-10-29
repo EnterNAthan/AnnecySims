@@ -1,0 +1,1102 @@
+/* Parcours de démonstration : proposition, avance rapide, compte rendu d'une décision.
+   Chargé après theme.css. */
+:root {
+  --good: #5fd08a;
+  --bad: #ff7a7a;
+  --report-w: 360px;
+}
+
+/* ---------- réglages : l'essentiel visible, l'affichage derrière ⚙ ---------- */
+#settings > button {
+  white-space: nowrap;
+}
+
+#stats-link { display: inline-flex; align-items: center; color: var(--text); text-decoration: none; border-radius: 12px; background: var(--panel-strong); }
+#stats-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+#display-open {
+  width: 40px;
+  padding: 0 !important;
+  justify-content: center;
+  font-size: 15px !important;
+}
+
+#settings > #display-menu {
+  position: absolute;
+  top: 48px;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  height: auto;
+  padding: 16px 18px;
+  border-radius: 18px;
+  background: var(--panel-strong);
+  cursor: default;
+}
+
+#settings > #display-menu.hidden {
+  display: none;
+}
+
+#display-menu label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* parkings : seulement avec la couche transports */
+body:not(.show-transit) .parking-label {
+  display: none;
+}
+
+.hide-feed #feed {
+  display: none;
+}
+
+/* ---------- panneaux de gauche ---------- */
+#agent {
+  left: 16px;
+  top: 76px;
+  width: 300px;
+  max-height: calc(100vh - 110px);
+  overflow: auto;
+}
+
+body.agent-open #today {
+  display: none;
+}
+
+#today {
+  max-height: calc(100vh - 120px);
+  overflow: auto;
+}
+
+.event-row.player b {
+  color: var(--text);
+}
+
+.city-events {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid var(--faint);
+}
+
+.city-events summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.city-events .event-row {
+  opacity: 0.75;
+}
+
+/* pendant le suivi d'une décision, la carte et le compte rendu ont toute la place */
+body.focusing #feed,
+body.focusing #live,
+body.focusing #today {
+  display: none;
+}
+
+body.focusing .event-label:not(.player) {
+  opacity: 0.35;
+}
+
+/* ---------- barre de commande ---------- */
+#command:has(#proposal:not(.hidden)) #chips {
+  display: none;
+}
+
+#proposal.thinking {
+  font-style: normal;
+  color: var(--text);
+}
+
+.t-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 14px;
+}
+
+.t-time {
+  margin-left: auto;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.t-quote {
+  margin: 8px 0 10px;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.t-steps {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: grid;
+  gap: 6px;
+  font-size: 13px;
+}
+
+.t-steps li {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: rgba(255, 255, 255, 0.3);
+  transition: color 0.3s;
+}
+
+.t-steps li::before {
+  content: "";
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1.5px solid currentColor;
+}
+
+.t-steps li.active {
+  color: var(--text);
+}
+
+.t-steps li.active::before {
+  background: var(--accent);
+  border-color: var(--accent);
+  box-shadow: 0 0 10px var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.t-steps li.done {
+  color: var(--muted);
+}
+
+.t-steps li.done::before {
+  background: var(--good);
+  border-color: var(--good);
+}
+
+@keyframes pulse {
+  50% {
+    opacity: 0.4;
+  }
+}
+
+#proposal.ready {
+  animation: rise 0.25s ease-out;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+.p-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.p-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 24px;
+}
+
+.p-head h3 {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.p-head .source {
+  margin-left: auto;
+  align-self: flex-start;
+  white-space: nowrap;
+}
+
+#proposal .p-head .kind-line {
+  margin: 2px 0 0;
+}
+
+.p-desc {
+  margin: 12px 0 10px;
+  font-size: 14px;
+  line-height: 1.45;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.p-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.p-facts span {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 12px;
+}
+
+#proposal .proposal-actions button[data-act="yes"] {
+  flex: 2;
+  font-weight: 600;
+  font-size: 14px;
+}
+
+#proposal .proposal-actions button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+#proposal > .hint {
+  margin-top: 8px;
+  text-align: center;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+/* ---------- avance rapide et notifications ---------- */
+#ff,
+#toast {
+  position: fixed;
+  left: 50%;
+  top: 78px;
+  z-index: 15;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 300px;
+  padding: 10px 12px 10px 16px;
+  border-radius: 18px;
+  border: 1px solid var(--hairline);
+  background: var(--panel-strong);
+  backdrop-filter: var(--blur);
+  box-shadow: var(--shadow);
+  transform: translateX(-50%);
+  animation: rise 0.25s ease-out;
+}
+
+#ff.hidden,
+#toast.hidden {
+  display: none;
+}
+
+#ff > span,
+#toast > span {
+  font-size: 20px;
+}
+
+#ff div,
+#toast div {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  gap: 2px;
+}
+
+#ff small,
+#toast small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#ff i {
+  display: block;
+  height: 3px;
+  margin-top: 6px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--accent) var(--p), rgba(255, 255, 255, 0.1) var(--p));
+}
+
+#ff button,
+#toast button {
+  padding: 6px 12px;
+  border: none;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.1);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+/* la notification de fin de journée ne masque pas l'avance rapide */
+#ff:not(.hidden) ~ #toast {
+  top: 146px;
+}
+
+/* ---------- compte rendu d'une décision ---------- */
+#decisions {
+  top: 76px;
+  right: 16px;
+  bottom: 16px;
+  width: var(--report-w);
+  max-height: none;
+  display: flex;
+  flex-direction: column;
+  padding: 0;
+  overflow: hidden;
+  animation: slide 0.3s ease-out;
+}
+
+#decisions.hidden {
+  display: none;
+}
+
+@keyframes slide {
+  from {
+    opacity: 0;
+    transform: translateX(20px);
+  }
+}
+
+/* la barre de commande reste centrée dans l'espace libre */
+body.focusing #command {
+  left: calc((100vw - var(--report-w) - 32px) / 2);
+  width: min(560px, calc(100vw - var(--report-w) - 80px));
+}
+
+.f-tabs {
+  display: flex;
+  gap: 6px;
+  padding: 12px 18px 0;
+  overflow-x: auto;
+}
+
+.f-tabs button {
+  flex: none;
+  padding: 4px 10px;
+  border: 1px solid var(--faint);
+  border-radius: 999px;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.f-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  padding: 18px 18px 12px;
+}
+
+.f-icon {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 48px;
+  height: 48px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 26px;
+}
+
+.f-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.f-title h2 {
+  margin: 4px 0 2px;
+  font-size: 18px;
+  font-weight: 600;
+  line-height: 1.25;
+  letter-spacing: -0.01em;
+}
+
+.f-title small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.f-status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11px;
+}
+
+.f-countdown {
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.f-pill {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.1);
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
+.f-pill.live {
+  background: rgba(255, 80, 80, 0.18);
+  color: #ff8a8a;
+  animation: pulse 1.6s ease-in-out infinite;
+}
+
+.f-pill.done {
+  background: rgba(95, 208, 138, 0.16);
+  color: var(--good);
+}
+
+.f-x {
+  flex: none;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--muted);
+  cursor: pointer;
+}
+
+/* étapes : Décision → Réactions → En direct → Analyse → Bilan */
+.f-steps {
+  display: flex;
+  margin: 0;
+  padding: 0 18px 14px;
+  list-style: none;
+  border-bottom: 1px solid var(--faint);
+}
+
+.f-steps li {
+  position: relative;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+  font-size: 10px;
+  color: rgba(255, 255, 255, 0.35);
+}
+
+/* trait qui relie les étapes */
+.f-steps li + li::after {
+  content: "";
+  position: absolute;
+  top: 5px;
+  right: 50%;
+  width: 100%;
+  height: 2px;
+  background: rgba(255, 255, 255, 0.1);
+  z-index: -1;
+}
+
+.f-steps li.done + li::after {
+  background: var(--good);
+}
+
+.f-steps i {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  background: #161b24;
+}
+
+.f-steps li.done {
+  color: var(--muted);
+}
+
+.f-steps li.done i {
+  border-color: var(--good);
+  background: var(--good);
+}
+
+.f-steps li.active {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.f-steps li.active i {
+  border-color: var(--accent);
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent);
+  animation: pulse 1s ease-in-out infinite;
+}
+
+.f-body {
+  flex: 1;
+  overflow-y: auto;
+  padding: 16px 18px;
+}
+
+.f-hero {
+  margin-bottom: 14px;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(142, 197, 255, 0.08);
+  border: 1px solid rgba(142, 197, 255, 0.15);
+}
+
+.f-hero b {
+  display: block;
+  font-size: 17px;
+  font-weight: 500;
+  line-height: 1.35;
+  letter-spacing: -0.01em;
+}
+
+.f-hero.good {
+  background: rgba(95, 208, 138, 0.1);
+  border-color: rgba(95, 208, 138, 0.25);
+}
+
+.f-hero.bad {
+  background: rgba(255, 122, 122, 0.1);
+  border-color: rgba(255, 122, 122, 0.25);
+}
+
+.f-hero.flat {
+  background: rgba(255, 200, 90, 0.08);
+  border-color: rgba(255, 200, 90, 0.22);
+}
+
+.f-kicker,
+.f-verdict {
+  display: block;
+  margin-bottom: 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.f-hero.good .f-verdict {
+  color: var(--good);
+}
+
+.f-hero.bad .f-verdict {
+  color: var(--bad);
+}
+
+.f-hero.flat .f-verdict {
+  color: #ffc85a;
+}
+
+.f-tiles {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+  margin-bottom: 6px;
+}
+
+.tile {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 12px 14px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+  overflow: hidden;
+}
+
+.tile small {
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tile b {
+  font-size: 24px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+.tile em {
+  font-style: normal;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.tile.good em {
+  color: var(--good);
+}
+
+.tile.bad em {
+  color: var(--bad);
+}
+
+.tile.good {
+  box-shadow: inset 3px 0 0 var(--good);
+}
+
+.tile.bad {
+  box-shadow: inset 3px 0 0 var(--bad);
+}
+
+.tile.wait b {
+  color: rgba(255, 255, 255, 0.25);
+}
+
+.tile svg.spark {
+  height: 24px;
+  margin-top: 4px;
+}
+
+.f-ref {
+  margin: 6px 0 12px;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.f-card {
+  margin: 12px 0;
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--faint);
+}
+
+.f-card.dim {
+  opacity: 0.6;
+}
+
+.f-card h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 10px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.f-card p {
+  margin: 0 0 10px;
+  line-height: 1.5;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.f-card > b {
+  display: block;
+  margin-bottom: 6px;
+}
+
+.f-card .reco {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: rgba(255, 210, 122, 0.08);
+  color: #ffe0a3;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.f-wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.f-mood {
+  margin-left: auto;
+  font-weight: 400;
+  font-size: 11px;
+  color: var(--muted);
+}
+
+.f-pn {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.f-pn span {
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 11px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.f-pn .good {
+  color: var(--good);
+}
+
+.f-pn .bad {
+  color: var(--bad);
+}
+
+.f-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px 8px;
+  margin-bottom: 12px;
+}
+
+.f-grid div {
+  display: flex;
+  flex-direction: column;
+}
+
+.f-grid small {
+  font-size: 10px;
+  color: var(--muted);
+}
+
+.f-grid b {
+  font-size: 16px;
+  font-weight: 400;
+  font-variant-numeric: tabular-nums;
+}
+
+.f-card .voice {
+  padding: 8px 0;
+  border-top: 1px solid var(--faint);
+}
+
+.f-card .voice:first-of-type {
+  border-top: none;
+}
+
+.f-card .voice em {
+  display: block;
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+.f-more {
+  margin-top: 12px;
+}
+
+.f-more summary {
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.f-more table.impact {
+  width: 100%;
+  margin-top: 8px;
+}
+
+.f-more th {
+  font-weight: 400;
+  font-size: 10px;
+  color: var(--muted);
+  text-align: right;
+}
+
+.f-actions {
+  display: flex;
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--faint);
+}
+
+.f-actions button {
+  padding: 10px 14px;
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.f-actions button.primary {
+  flex: 1;
+  background: #fff;
+  color: #0b0f16;
+  font-weight: 600;
+}
+
+.f-actions button:hover {
+  filter: brightness(1.1);
+}
+
+/* même compte rendu dans l'historique */
+.f-report .f-head {
+  padding: 0 0 12px;
+}
+
+.f-report .f-body {
+  padding: 0;
+}
+
+@media (max-width: 1200px) {
+  :root {
+    --report-w: 340px;
+  }
+}
+
+@media (max-width: 900px) {
+  #decisions {
+    top: auto;
+    left: 16px;
+    right: 16px;
+    width: auto;
+    height: 55vh;
+  }
+  body.focusing #command {
+    display: none;
+  }
+}
+
+/* ---------- densité : interface plus compacte, la ville reste au premier plan ---------- */
+#hud {
+  top: 10px;
+  gap: 12px;
+  padding: 4px 4px 4px 16px;
+}
+
+#time {
+  font-size: 21px;
+}
+
+#date {
+  font-size: 11px;
+}
+
+#play {
+  width: 28px;
+  height: 28px;
+}
+
+.seg button {
+  padding: 4px 9px !important;
+  font-size: 11px !important;
+}
+
+#settings {
+  top: 10px;
+  right: 12px;
+}
+
+#settings > * {
+  height: 34px;
+  padding: 0 12px;
+  font-size: 11px;
+}
+
+#display-open,
+#zen {
+  width: 34px;
+}
+
+#settings > #display-menu {
+  top: 42px;
+}
+
+.panel {
+  padding: 12px 14px;
+  border-radius: 18px;
+  font-size: 12px;
+}
+
+#today,
+#agent {
+  top: 60px;
+  left: 12px;
+  width: 260px;
+}
+
+#feed {
+  right: 12px;
+  bottom: 12px;
+  width: 280px;
+  max-height: 200px;
+  font-size: 11px;
+}
+
+#command {
+  bottom: 14px;
+}
+
+#command-form {
+  padding: 4px 4px 4px 16px;
+}
+
+#command-form input {
+  font-size: 13px;
+}
+
+#command-form button[type="submit"] {
+  width: 30px;
+  height: 30px;
+  font-size: 14px;
+}
+
+#chips button {
+  padding: 4px 10px;
+  font-size: 11px;
+}
+
+#proposal {
+  padding: 14px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+}
+
+.p-icon {
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
+  font-size: 19px;
+}
+
+.p-head h3 {
+  font-size: 15px;
+}
+
+.p-desc {
+  margin: 10px 0 8px;
+  font-size: 13px;
+}
+
+.p-facts span {
+  padding: 3px 8px;
+  font-size: 11px;
+}
+
+#proposal .proposal-actions button {
+  padding: 8px;
+  font-size: 13px;
+}
+
+#ff,
+#toast {
+  top: 60px;
+  min-width: 260px;
+  padding: 8px 10px 8px 14px;
+  border-radius: 14px;
+  font-size: 13px;
+}
+
+#ff:not(.hidden) ~ #toast {
+  top: 118px;
+}
+
+#decisions {
+  top: 60px;
+  right: 12px;
+  bottom: 12px;
+  border-radius: 18px;
+}
+
+.f-head {
+  gap: 12px;
+  padding: 14px 14px 10px;
+}
+
+.f-icon {
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  font-size: 20px;
+}
+
+.f-title h2 {
+  font-size: 15px;
+}
+
+.f-title small {
+  font-size: 11px;
+}
+
+.f-steps {
+  padding: 0 14px 10px;
+}
+
+.f-steps i {
+  width: 10px;
+  height: 10px;
+}
+
+.f-steps li + li::after {
+  top: 4px;
+}
+
+.f-body {
+  padding: 12px 14px;
+  font-size: 12px;
+}
+
+.f-hero {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border-radius: 12px;
+}
+
+.f-hero b {
+  font-size: 14px;
+}
+
+.f-kicker,
+.f-verdict {
+  font-size: 10px;
+}
+
+.f-tiles {
+  gap: 6px;
+}
+
+.tile {
+  padding: 9px 11px;
+  border-radius: 12px;
+}
+
+.tile small,
+.tile em {
+  font-size: 10px;
+}
+
+.tile b {
+  font-size: 19px;
+}
+
+.tile svg.spark {
+  height: 18px;
+}
+
+.f-card {
+  margin: 10px 0;
+  padding: 11px 12px;
+  border-radius: 12px;
+}
+
+.f-card h4 {
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.f-grid b {
+  font-size: 14px;
+}
+
+.f-actions {
+  padding: 10px 14px 12px;
+}
+
+.f-actions button {
+  padding: 8px 12px;
+  border-radius: 12px;
+  font-size: 12px;
+}
+
+body.focusing #command {
+  width: min(520px, calc(100vw - var(--report-w) - 64px));
+}

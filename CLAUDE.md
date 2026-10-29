@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
-Simulation 3D (Three.js + Vite, TypeScript strict, ESM) du centre d'Annecy construite à partir d'OpenStreetMap : ~10 000 habitants simulés minute par minute, événements déclenchés en langage naturel (interprétés par Claude), bilans quotidiens. Les textes visibles par le joueur sont en français.
+Simulation 3D (Three.js + Vite, TypeScript strict, ESM) du centre d'Annecy construite à partir d'OpenStreetMap : 50 habitants simulés par défaut, événements déclenchés en langage naturel (interprétés par Claude), bilans quotidiens. Les textes visibles par le joueur sont en français.
 
 ## Commandes
 
@@ -20,7 +20,13 @@ npm run build-city     # data/osm-raw.json → public/city.json (versionné, ~2,
 
 `sim:headless` sert de test de non-régression du moteur : vérifier les temps et la cohérence du bilan après une modif dans `src/sim/`.
 
-Paramètres d'URL de la page : `?pop=N` (habitants), `?h=N` (heure de départ), `?paused`, `?debug` (expose `window.sim`).
+Paramètres d'URL de la page : `?pop=N` (50 habitants par défaut), `?h=N` (heure de départ), `?paused`, `?debug` (expose `window.sim`), `?ai=off` (désactive les décisions individuelles).
+
+## Intelligence individuelle
+
+Les habitants utilisent Arkane/Qwen via `server/intelligence.ts`, séparément des routes municipales Claude Code et de leur repli local. `src/sim/intelligence.ts` orchestre les décisions sans bloquer les ticks ; `aiContext.ts` transmet les besoins, souvenirs, contraintes, mobilité et événements proches actifs du nouveau moteur. Les visiteurs des événements et véhicules de transit restent gérés par le moteur : ils ne sont pas ajoutés aux appels Qwen des résidents.
+
+`/stats` expose les mesures et la configuration (`/api/ai-config`). Profil stable : groupes de cinq, un appel en cours, `reasoning_effort: none`, un agent = une personne (`AGENT_SCALE = 1`). La clé `ARKANE_API_KEY` reste côté serveur. `npm run test:ai` vérifie aussi le raccordement aux événements, bus et parkings. Voir `benchmarks/README.md` pour les mesures Arkane isolées. Les endpoints sont disponibles uniquement avec le serveur de développement.
 
 `ANTHROPIC_API_KEY` dans `.env` (voir `.env.example`) ; sans clé, l'interprétation retombe sur les mots-clés.
 
@@ -28,7 +34,7 @@ Paramètres d'URL de la page : `?pop=N` (habitants), `?h=N` (heure de départ), 
 
 Trois zones, séparées par ce qui peut tourner où :
 
-- **`src/sim/`** — moteur pur, sans DOM ni Three.js, exécutable dans Node (`scripts/sim-headless.ts`) comme dans le Web Worker (`worker.ts`). `engine.ts` est le cœur : agents, graphe routier (`graph.ts`), lieux (`places.ts`), planning journalier (`planner.ts`), événements/météo (`events.ts`). Un agent représente `AGENT_SCALE` = 4 personnes réelles pour le trafic, le CA et le CO₂.
+- **`src/sim/`** — moteur pur, sans DOM ni Three.js, exécutable dans Node (`scripts/sim-headless.ts`) comme dans le Web Worker (`worker.ts`). `engine.ts` est le cœur : agents, graphe routier (`graph.ts`), lieux (`places.ts`), planning journalier (`planner.ts`), événements/météo (`events.ts`). Un agent représente `AGENT_SCALE` = 1 personne réelle pour le trafic, le CA et le CO₂.
 - **`src/render/` + `src/main.ts` + `src/ui/`** — thread principal : scène Three.js, horloge (`SimClock`), UI. `main.ts` pilote le worker.
 - **`src/shared/`** — importé partout, y compris par le serveur : format `City`, projection géo (`BBOX`, `project`), catalogue d'événements, lieux nommés, interpréteur par mots-clés.
 

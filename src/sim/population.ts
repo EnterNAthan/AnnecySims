@@ -8,7 +8,7 @@ import {
   INCOME_FACTOR, INCOME_MEDIAN, PART_TIME_RATE, POVERTY_RATE, SINGLE_PARENT_MOTHER,
 } from "./demographics";
 
-export const PROFILES = ["salarie", "frontalier", "etudiant", "retraite", "commercant", "enfant", "chomeur", "inactif", "touriste", "pendulaire"] as const;
+export const PROFILES = ["salarie", "frontalier", "etudiant", "retraite", "commercant", "enfant", "chomeur", "inactif", "touriste", "pendulaire", "visiteur", "transit"] as const;
 export type Profile = (typeof PROFILES)[number];
 
 export const PROFILE_LABEL: Record<Profile, string> = {
@@ -22,6 +22,8 @@ export const PROFILE_LABEL: Record<Profile, string> = {
   inactif: "Au foyer / inactif·ve",
   touriste: "Touriste",
   pendulaire: "Pendulaire (vit hors zone)",
+  visiteur: "Visiteur d'un jour (événement)",
+  transit: "Transit et livraisons",
 };
 
 export const PROFILE_COLOR: Record<Profile, string> = {
@@ -35,6 +37,8 @@ export const PROFILE_COLOR: Record<Profile, string> = {
   inactif: "#e0a8c8",
   touriste: "#ef5d8a",
   pendulaire: "#6fd3d6",
+  visiteur: "#ff7a45",
+  transit: "#8d99a6",
 };
 
 
@@ -57,7 +61,21 @@ export interface Trip {
   /** durée à vide estimée, en minutes */
   freeMinutes: number;
   style?: "run" | "dog";
+  /** étapes suivantes d'un trajet composé (voiture puis marche depuis le parking, marche puis bus…) */
+  legs?: Leg[];
+  /** en bus : la course empruntée ; l'habitant attend à l'arrêt jusqu'à `board` */
+  ride?: { dir: number; t0: number; board: number; alight: number; stop: number };
+  /** trajet en transports en commun (pour les statistiques) */
+  transit?: boolean;
+  /** minute depuis laquelle la voiture attend que le tronçon suivant se libère (file d'attente) */
+  blocked?: number;
 }
+
+/** Étape d'un trajet composé : un déplacement entre deux nœuds, ou une course de bus. */
+export type Leg =
+  | { kind: "move"; mode: Mode; from: number; to: number; /** parking à libérer au départ */ release?: number }
+  | { kind: "bus"; dir: number; t0: number; board: number; alight: number; from: number; to: number }
+  | { kind: "wait"; minutes: number };
 
 export interface Needs {
   energy: number;
@@ -116,6 +134,16 @@ export interface Agent {
   hasDog: boolean;
   /** minute de la dernière pensée exprimée, pour ne pas spammer */
   lastThought: number;
+  /** quartier de résidence (groupes d'habitants) */
+  district: string;
+  /** mode de la dernière tournée : 1 marche, 2 vélo, 3 voiture */
+  usualMode: number;
+  /** préférences décidées pour son groupe face à un événement en cours */
+  bias: { car: number; bike: number; walk: number } | null;
+  /** jour où il covoiture (grève des trains), pour forcer la voiture */
+  carpoolDay: number;
+  /** parking où sa voiture est garée (index), -1 sinon */
+  parked: number;
   /** dernières pensées exprimées (la plus récente en dernier) */
   thoughtLog: { icon: string; text: string; day: number; minute: number }[];
 }
@@ -324,7 +352,7 @@ interface Draft extends ShapePerson {
 
 const BIKE_SHARE: Record<Profile, number> = {
   salarie: 0.35, frontalier: 0.1, etudiant: 0.45, retraite: 0.2, commercant: 0.25, enfant: 0.3, chomeur: 0.25, inactif: 0.2,
-  touriste: 0.15, pendulaire: 0,
+  touriste: 0.15, pendulaire: 0, visiteur: 0, transit: 0,
 };
 const DOG_RATE: Partial<Record<Profile, number>> = { retraite: 0.3, salarie: 0.12, frontalier: 0.12, commercant: 0.12, etudiant: 0.12, chomeur: 0.12, inactif: 0.12 };
 
@@ -385,6 +413,8 @@ export function createPopulation(
         x: home.x, z: home.z, heading: 0,
         travelMinutes: 0, delayMinutes: 0, spentToday: 0,
         hasDog: false, lastThought: -999, thoughtLog: [],
+        // le mode habituel est relevé à chaque départ du domicile
+        district: "", usualMode: 1, bias: null, carpoolDay: -1, parked: -1,
       };
       agents.push(a);
       hh.members.push(a);
@@ -472,8 +502,9 @@ export function createPopulation(
   for (const h of residentHouseholds) {
     assignCars(h);
     for (const m of h.members) {
-      // cross-border workers without a car take the train (Léman Express) at the station
-      if (m.profile === "frontalier") m.exit = m.hasCar ? genevaExits[Math.floor(rand() * genevaExits.length)] : places.list("station")[0];
+      // cross-border workers without a car take the train (Léman Express) at the station,
+      // and so do some who own one (park-and-ride, no parking in Geneva)
+      if (m.profile === "frontalier") m.exit = m.hasCar && rand() >= 0.2 ? genevaExits[Math.floor(rand() * genevaExits.length)] : places.list("station")[0];
     }
     // at most one dog per household, walked by an adult (retirees most likely)
     const walkers = h.members.filter((m) => m.age >= 18 && DOG_RATE[m.profile] !== undefined);

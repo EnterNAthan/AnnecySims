@@ -185,7 +185,7 @@ body {
   position: fixed;
   right: 12px;
   top: 12px;
-  width: 310px;
+  width: 350px;
   max-height: calc(100vh - 320px);
   display: flex;
   flex-direction: column;
@@ -652,6 +652,255 @@ button.wide {
   font-style: italic;
 }
 
+/* ---------- Décisions du joueur ---------- */
+
+#decisions {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.decision {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.decision summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.decision summary::-webkit-details-marker {
+  display: none;
+}
+
+.d-icon {
+  font-size: 20px;
+}
+
+.d-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.d-title small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.decision summary button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.decision summary button:hover {
+  color: var(--text);
+}
+
+table.impact {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+table.impact td {
+  padding: 2px 3px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+table.impact td:first-child {
+  color: var(--muted);
+}
+
+table.impact td:nth-child(3) {
+  color: var(--muted);
+}
+
+table.impact td:last-child {
+  text-align: right;
+  font-weight: 600;
+}
+
+.good {
+  color: #5fd08a;
+}
+
+.bad {
+  color: #ff6b6b;
+}
+
+.flat {
+  color: var(--muted);
+}
+
+.sub {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.badge {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(108, 195, 255, 0.15);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.voice {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+
+.voice .m {
+  font-size: 18px;
+}
+
+.voice small {
+  color: var(--muted);
+}
+
+.voice em {
+  color: #dfe7ef;
+}
+
+.voice .acts {
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.analysis p {
+  margin: 4px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.analysis .reco {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 210, 122, 0.1);
+  color: #ffd27a;
+  font-size: 12px;
+}
+
+.voice-tag {
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(108, 195, 255, 0.15);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.event-row.player {
+  border-color: rgba(108, 195, 255, 0.4);
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#proposal .details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+}
+
+.proposal-actions .hint {
+  align-self: center;
+  margin-left: auto;
+  color: #7fe3ff;
+  font-size: 11px;
+}
+
+.extreme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.extreme-on #command-form {
+  border-color: rgba(255, 106, 26, 0.6);
+}
+
+#chips button.extreme {
+  border-color: rgba(255, 106, 26, 0.5);
+}
+
+.route-flag {
+  padding: 2px 8px;
+  border-radius: 8px;
+  border-left: 4px solid var(--c);
+  background: rgba(16, 22, 32, 0.85);
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.route-flag.banner {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+table.impact td {
+  white-space: nowrap;
+}
+
+.chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.chips-row span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
+}
+
 .household {
   margin: 4px 0 8px;
   padding: 0;
@@ -674,4 +923,489 @@ button.wide {
 .household li span {
   margin-left: auto;
   color: var(--muted);
+}
+
+/* ---------- Grands événements : fréquentation et bilan ---------- */
+
+svg.spark {
+  display: block;
+  width: 100%;
+  height: 46px;
+}
+
+svg.spark .area {
+  fill: rgba(108, 195, 255, 0.18);
+}
+
+svg.spark .line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.bilan .kpis {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 4px;
+  margin: 6px 0;
+}
+
+.bilan .kpi {
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.bilan .kpi small {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.bilan .kpi b {
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.bilan p {
+  margin: 4px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.bilan .reco {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 210, 122, 0.1);
+  color: #ffd27a;
+  font-size: 12px;
+}
+
+.badge.verdict.good {
+  background: rgba(95, 208, 138, 0.18);
+}
+
+.badge.verdict.bad {
+  background: rgba(255, 107, 107, 0.18);
+}
+
+.event-label .presence:empty {
+  display: none;
+}
+
+#proposal .kind-line {
+  margin: -2px 0 4px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+#proposal details.params {
+  margin-top: 8px;
+  font-size: 12px;
+}
+
+#proposal details.params summary {
+  cursor: pointer;
+  color: var(--accent);
+}
+
+.param-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px 10px;
+  margin-top: 6px;
+}
+
+.param-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.param-grid label.check {
+  flex-direction: row;
+  align-items: center;
+  gap: 4px;
+}
+
+.param-grid input,
+.param-grid select {
+  padding: 3px 5px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font: inherit;
+}
+
+#proposal .props {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 10px;
+  margin-top: 8px;
+  font-size: 11px;
+}
+
+#proposal .props label {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+/* ---------- Historique ---------- */
+
+#history {
+  position: fixed;
+  inset: 70px 60px 90px;
+  z-index: 30;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 18px;
+  border-radius: 16px;
+  background: rgba(14, 20, 30, 0.94);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+  color: var(--text);
+  font-size: 13px;
+}
+
+#history.hidden {
+  display: none;
+}
+
+.h-head {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.h-head h2 {
+  margin: 0;
+  font-size: 17px;
+}
+
+.h-head .seg button {
+  padding: 5px 12px;
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.h-head .seg button.active {
+  background: rgba(108, 195, 255, 0.18);
+  color: var(--text);
+}
+
+.h-close {
+  margin-left: auto;
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  font-size: 18px;
+  cursor: pointer;
+}
+
+.h-trends {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+  margin: 12px 0;
+}
+
+.h-trends > .muted {
+  grid-column: 1 / -1;
+  margin: 0;
+}
+
+.h-trends-empty {
+  margin: 10px 0;
+}
+
+.trend {
+  padding: 8px 10px;
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.trend small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.trend b {
+  font-size: 16px;
+}
+
+.trend span {
+  margin-left: 6px;
+  font-size: 11px;
+}
+
+.trend svg {
+  display: block;
+  width: 100%;
+  height: 44px;
+  margin-top: 4px;
+}
+
+.trend .line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.trend .mark {
+  stroke: #ffd27a;
+  stroke-width: 1;
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.h-body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: 340px 1fr;
+  gap: 14px;
+  min-height: 0;
+}
+
+.h-list,
+.h-detail {
+  overflow: auto;
+  min-height: 0;
+}
+
+.h-row {
+  display: grid;
+  grid-template-columns: 28px 1fr auto;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin: 3px 0;
+  padding: 7px 8px;
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.03);
+  color: var(--text);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+
+.h-row:hover,
+.h-row.sel {
+  border-color: var(--accent);
+}
+
+.h-row small {
+  display: block;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.h-row em {
+  color: var(--accent);
+  font-size: 11px;
+  font-style: normal;
+}
+
+.h-icon {
+  font-size: 18px;
+}
+
+.h-hint {
+  margin-top: 40px;
+  text-align: center;
+}
+
+.h-detail .decision {
+  margin: 0;
+}
+
+.h-detail .kpis {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 6px;
+}
+
+.h-detail .kpi {
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.h-detail .kpi small {
+  display: block;
+  color: var(--muted);
+}
+
+/* ---------- Parkings ---------- */
+
+.parking-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 1px;
+  border-radius: 7px;
+  background: rgba(16, 22, 32, 0.8);
+  color: var(--text);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.parking-label b {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  background: var(--c, #2a6fd6);
+  color: #fff;
+  font-size: 10px;
+}
+
+.hide-labels .parking-label {
+  display: none;
+}
+
+button.ask {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border: 1px solid rgba(108, 195, 255, 0.4);
+  border-radius: 8px;
+  background: rgba(108, 195, 255, 0.12);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+
+.about-tag {
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(255, 210, 122, 0.12);
+  color: #ffd27a;
+  font-size: 10px;
+}
+
+/* ---------- Ouverture : carte vue du ciel, puis plongée ---------- */
+
+#hud,
+#settings,
+.panel,
+#right,
+#command,
+#feed {
+  transition: opacity 1.2s ease;
+}
+
+body.intro #hud,
+body.intro #settings,
+body.intro .panel,
+body.intro #right,
+body.intro #command,
+body.intro #feed,
+body.intro #credits {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.intro .labels .event-label,
+body.intro .labels .parking-label,
+body.intro .labels .thought-bubble {
+  display: none;
+}
+
+#intro {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  cursor: pointer;
+  background: radial-gradient(ellipse at center, rgba(8, 14, 24, 0) 40%, rgba(8, 14, 24, 0.55) 100%);
+  transition: opacity 1.4s ease;
+}
+
+#intro.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.intro-title {
+  font-size: clamp(48px, 9vw, 120px);
+  font-weight: 200;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
+  padding-left: 0.35em;
+}
+
+.intro-sub {
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.8);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+  animation: intro-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes intro-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------- Calques de la carte (barre verticale à gauche) ---------- */
+
+#layers {
+  position: fixed;
+  left: 16px;
+  top: 50%;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: opacity 1.2s ease;
+}
+
+#layers button {
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 17px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#layers button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#layers button.active {
+  background: rgba(108, 195, 255, 0.25);
+}
+
+body.intro #layers {
+  opacity: 0;
+  pointer-events: none;
 }

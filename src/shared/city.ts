@@ -63,3 +63,9 @@ export interface City {
   pois: Poi[];
   terrain: { half: number; res: number; h: number[] }; // grille (res+1)², hauteurs en m
 }
+
+/** Transports en commun et stationnement (public/transit.json). */
+export interface Transit {
+  lines: { ref: string; colour: string; dirs: { name: string; stops: { name: string; x: number; z: number }[] }[] }[];
+  parkings: { name: string; x: number; z: number; capacity: number; kind: "surface" | "ouvrage"; paid: boolean }[];
+}

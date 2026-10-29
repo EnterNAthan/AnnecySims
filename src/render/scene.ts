@@ -6,6 +6,7 @@ import { CSS2DRenderer } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import { sunDirection } from "../shared/astro";
 import { streetMaterials, waterMaterial } from "./cityMeshes";
 import type { WeatherKind } from "../sim/events";
+import type { ViewStyle } from "./viewStyle";
 
 const SHADOW_RADIUS = 1400;
 const PRECIP_BOX = 1800;
@@ -22,6 +23,8 @@ export class World {
   private readonly moon = new THREE.DirectionalLight("#9bb4ff", 0);
   private readonly hemi = new THREE.HemisphereLight("#cfe3ff", "#6d6a5a", 1);
   private readonly fog = new THREE.Fog("#c9d8e6", 3000, 26000);
+  /** « verre » : ville nocturne bleutée sans ciel ; « réaliste » : ciel physique et couleurs naturelles */
+  viewStyle: ViewStyle = "verre";
   /** 0 en plein jour, 1 en pleine nuit */
   night = 0;
   private windowMaterial?: THREE.MeshStandardMaterial;
@@ -244,6 +247,32 @@ export class World {
       this.hemi.intensity *= 0.55;
     }
     waterMaterial.color.set("#3a7ca3").lerp(new THREE.Color("#0b1d33"), this.night * 0.85);
+    if (this.viewStyle === "verre") this.applyGlass(day, power);
+    else {
+      this.sky.visible = true;
+      this.scene.background = null;
+      this.hemi.groundColor.set("#6d6a5a");
+    }
+  }
+
+  /** Ambiance « verre » : fond bleu nuit uni, lumière froide, fenêtres toujours un peu allumées. */
+  private applyGlass(day: number, power: number) {
+    this.sky.visible = false;
+    const bg = new THREE.Color("#121c2c").lerp(new THREE.Color("#070b12"), this.night);
+    if (this.storm) bg.lerp(new THREE.Color("#1a1f27"), 0.5);
+    this.scene.background = bg;
+    this.fog.color.copy(bg);
+    this.fog.near = 1800;
+    this.fog.far = 16000;
+    this.renderer.toneMappingExposure = 0.8 + day * 0.2;
+    this.sun.color.set("#dfe8ff");
+    this.sun.intensity *= 0.8;
+    this.hemi.color.set("#9db4dc");
+    this.hemi.groundColor.set("#1a2130");
+    this.hemi.intensity = 1.4 + day * 0.6;
+    this.moon.intensity = 1.2;
+    if (this.windowMaterial) this.windowMaterial.emissiveIntensity = (0.6 + 1.1 * this.night) * power;
+    waterMaterial.color.set("#1d4166").lerp(new THREE.Color("#0f2540"), this.night);
   }
 
   render(dt: number) {

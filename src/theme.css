@@ -1,0 +1,574 @@
+/* Thème « Verre » : îlot central, panneaux en verre dépoli, typographie fine.
+   Chargé après style.css, dont il ne garde que la structure. */
+:root {
+  --panel: rgba(22, 26, 34, 0.52);
+  --panel-strong: rgba(22, 26, 34, 0.72);
+  --hairline: rgba(255, 255, 255, 0.09);
+  --faint: rgba(255, 255, 255, 0.07);
+  --text: #f5f7fa;
+  --muted: rgba(235, 240, 248, 0.55);
+  --accent: #8ec5ff;
+  --radius: 22px;
+  --blur: blur(28px) saturate(170%);
+  --shadow: 0 0.5px 0 rgba(255, 255, 255, 0.12) inset, 0 20px 50px rgba(0, 0, 0, 0.35);
+  font-family: -apple-system, "SF Pro Text", "Inter", system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+html,
+body {
+  background: #070b12;
+}
+
+/* ---------- surfaces en verre ---------- */
+#hud,
+#settings > *,
+.panel,
+#command-form,
+#proposal {
+  background: var(--panel);
+  backdrop-filter: var(--blur);
+  -webkit-backdrop-filter: var(--blur);
+  border: 1px solid var(--hairline);
+  box-shadow: var(--shadow);
+}
+
+.panel {
+  padding: 16px 18px;
+  border-radius: var(--radius);
+  font-size: 13px;
+}
+
+.panel-title {
+  margin-bottom: 10px;
+  font-size: 11px;
+  font-weight: 500;
+  line-height: 1.2;
+  letter-spacing: 0.02em;
+  text-transform: none;
+  color: var(--muted);
+}
+
+/* ---------- îlot central : heure, météo, vitesse ---------- */
+#hud {
+  top: 14px;
+  left: 50%;
+  transform: translateX(-50%);
+  gap: 18px;
+  padding: 7px 7px 7px 22px;
+  border-radius: 999px;
+  white-space: nowrap;
+}
+
+#hud .clock {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+#time {
+  min-width: 0;
+  font-size: 26px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+
+#date {
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--muted);
+}
+
+#weather {
+  padding-left: 18px;
+  border-left: 1px solid var(--faint);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+#hud button,
+#settings button {
+  min-width: 0;
+  border: none;
+  background: none;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 500;
+  font-family: inherit;
+  cursor: pointer;
+  transition: background 0.2s, color 0.2s;
+}
+
+#play {
+  width: 34px;
+  height: 34px;
+  border-radius: 50% !important;
+  background: rgba(255, 255, 255, 0.1) !important;
+  color: var(--text) !important;
+  font-size: 11px !important;
+}
+
+.seg {
+  display: flex;
+  padding: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.seg button {
+  padding: 6px 12px !important;
+  border-radius: 999px;
+}
+
+.seg button:hover {
+  color: var(--text) !important;
+}
+
+.seg button.active {
+  background: rgba(255, 255, 255, 0.9) !important;
+  color: #0b0f16 !important;
+}
+
+/* ---------- réglages en haut à droite ---------- */
+#settings {
+  position: fixed;
+  top: 14px;
+  right: 16px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+#settings > * {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 40px;
+  padding: 0 14px;
+  border-radius: 999px;
+  font-size: 12px;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+#settings > .seg {
+  padding: 3px;
+  cursor: default;
+}
+
+#settings > .seg button {
+  height: 32px;
+  padding: 0 12px !important;
+}
+
+#settings input[type="checkbox"] {
+  accent-color: #fff;
+  margin: 0;
+}
+
+#settings input[type="range"] {
+  width: 70px;
+  accent-color: #fff;
+}
+
+#traffic.active,
+#settings > button.active {
+  color: var(--text) !important;
+  background: rgba(255, 255, 255, 0.16);
+}
+
+#zen {
+  width: 40px;
+  padding: 0 !important;
+  justify-content: center;
+  font-size: 15px !important;
+}
+
+/* ---------- panneaux ---------- */
+#today {
+  left: 16px;
+  top: 76px;
+  width: 280px;
+  max-width: none;
+}
+
+#live {
+  left: 16px;
+  bottom: 16px;
+  width: 280px;
+}
+
+#right {
+  top: 76px;
+  right: 16px;
+  width: 310px;
+  gap: 12px;
+  max-height: calc(100vh - 340px);
+}
+
+#feed {
+  right: 16px;
+  bottom: 16px;
+  width: 310px;
+  max-height: 240px;
+}
+
+.event-row {
+  padding: 10px 0;
+  margin: 0;
+  border: none;
+  border-top: 1px solid var(--faint);
+  border-radius: 0;
+  background: none;
+}
+
+.event-row:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.event-row:hover {
+  border-color: var(--faint);
+  color: var(--accent);
+}
+
+/* compteurs en grands chiffres fins */
+#counts {
+  grid-template-columns: 1fr auto;
+  gap: 6px 14px;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+#counts .v {
+  font-size: 17px;
+  font-weight: 300;
+  color: var(--text);
+  letter-spacing: -0.01em;
+}
+
+#legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-top: 14px;
+  padding-top: 12px;
+  border-top: 1px solid var(--faint);
+  font-size: 11px;
+}
+
+#legend span::before {
+  width: 6px;
+  height: 6px;
+}
+
+/* fiche habitant */
+.agent-head h3 {
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.agent-head .dot {
+  width: 38px;
+  height: 38px;
+  background: radial-gradient(circle at 35% 30%, rgba(255, 255, 255, 0.4) 0, transparent 60%), var(--c);
+}
+
+.agent-head button {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.08);
+  font-size: 11px;
+}
+
+.now {
+  margin: 14px 0 10px;
+  padding: 0;
+  background: none;
+  color: var(--text);
+  font-size: 14px;
+}
+
+.now::before {
+  content: "";
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 8px;
+  border-radius: 50%;
+  background: #5fd08a;
+  box-shadow: 0 0 8px #5fd08a;
+  vertical-align: middle;
+}
+
+.mind {
+  padding: 12px 14px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.07);
+  color: rgba(255, 255, 255, 0.86);
+  line-height: 1.45;
+}
+
+.mind em {
+  font-style: normal;
+}
+
+.need {
+  grid-template-columns: 80px 1fr;
+}
+
+.need i {
+  height: 4px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, rgba(255, 255, 255, 0.85) var(--v), rgba(255, 255, 255, 0.08) var(--v));
+}
+
+.schedule li.current {
+  color: var(--text);
+}
+
+.schedule li {
+  color: var(--muted);
+}
+
+button.wide {
+  margin-top: 8px;
+  padding: 10px;
+  border: none;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#report .kpi {
+  padding: 10px 12px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+#report .kpi b {
+  font-size: 20px;
+  font-weight: 300;
+  letter-spacing: -0.02em;
+}
+
+.decision {
+  border-radius: 16px;
+  border-color: var(--faint);
+}
+
+/* fil des pensées */
+.feed-row {
+  padding: 7px 0;
+  border-top: none;
+  line-height: 1.4;
+}
+
+.feed-row .dot {
+  width: 6px;
+  height: 6px;
+  margin-top: 6px;
+}
+
+.feed-row b {
+  font-weight: 500;
+}
+
+.feed-row em {
+  font-style: normal;
+}
+
+/* ---------- barre de commande ---------- */
+#command {
+  bottom: 22px;
+  width: min(580px, calc(100vw - 700px));
+}
+
+#command-form {
+  padding: 6px 6px 6px 20px;
+  border-radius: 999px;
+  transition: border-color 0.3s, box-shadow 0.3s;
+}
+
+#command-form:focus-within {
+  border-color: rgba(142, 197, 255, 0.45);
+  box-shadow: 0 0 0 4px rgba(142, 197, 255, 0.08), 0 20px 50px rgba(0, 0, 0, 0.35);
+}
+
+#command-form > span {
+  color: var(--muted);
+}
+
+#command-form input::placeholder {
+  color: var(--muted);
+}
+
+#command-form button[type="submit"] {
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  border-radius: 50%;
+  background: #fff;
+  color: #0b0f16;
+  font-size: 16px;
+}
+
+.extreme-toggle {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+/* les suggestions n'apparaissent que pendant la saisie */
+#chips {
+  margin-top: 10px;
+  opacity: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+  transition: opacity 0.25s, transform 0.25s;
+}
+
+#command:focus-within #chips {
+  opacity: 1;
+  transform: none;
+  pointer-events: auto;
+}
+
+#chips button {
+  padding: 6px 12px;
+  border: 1px solid var(--faint);
+  background: var(--panel);
+  backdrop-filter: blur(20px);
+  color: var(--muted);
+}
+
+#chips button:hover {
+  color: var(--text);
+}
+
+#proposal {
+  margin-bottom: 10px;
+  padding: 18px 20px;
+  border-radius: 24px;
+}
+
+.proposal-actions button {
+  flex: 1;
+  padding: 10px;
+  border-radius: 14px;
+  background: #fff;
+  color: #0b0f16;
+  font-weight: 500;
+}
+
+.proposal-actions button.secondary {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+/* ---------- étiquettes sur la carte ---------- */
+.landmark {
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: rgba(22, 26, 34, 0.45);
+  backdrop-filter: blur(12px);
+  font-size: 11px;
+  font-weight: 500;
+  color: rgba(255, 255, 255, 0.85);
+}
+
+.landmark.lake {
+  background: none;
+  backdrop-filter: none;
+  font-size: 18px;
+  font-weight: 300;
+  font-style: normal;
+  letter-spacing: 0.3em;
+  text-transform: uppercase;
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.event-label {
+  padding: 6px 12px 6px 6px;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 999px;
+  background: rgba(22, 26, 34, 0.6);
+  backdrop-filter: blur(16px);
+}
+
+.event-label .icon {
+  display: grid;
+  place-items: center;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.1);
+  font-size: 14px;
+}
+
+.thought-bubble {
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.88);
+  font-size: 15px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.3);
+}
+
+.mind-bubble {
+  padding: 9px 13px;
+  border-radius: 16px 16px 16px 4px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #141820;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35);
+}
+
+#credits {
+  color: rgba(255, 255, 255, 0.3);
+}
+
+#loading {
+  font-weight: 300;
+  letter-spacing: 0.02em;
+}
+
+/* ---------- mode zen (touche H) ---------- */
+.panel,
+#right,
+#settings > *:not(#zen) {
+  transition: opacity 0.4s;
+}
+
+body.zen .panel,
+body.zen #right,
+body.zen #settings > *:not(#zen) {
+  opacity: 0;
+  pointer-events: none;
+}
+
+/* ---------- écrans étroits ---------- */
+@media (max-width: 1200px) {
+  #date,
+  #weather {
+    display: none;
+  }
+  #command {
+    width: calc(100vw - 660px);
+  }
+}
+@media (max-width: 900px) {
+  #today,
+  #feed,
+  #live {
+    display: none;
+  }
+  #command {
+    width: calc(100vw - 32px);
+    min-width: 0;
+  }
+}

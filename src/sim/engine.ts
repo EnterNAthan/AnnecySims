@@ -2,21 +2,33 @@
 import type { City } from "../shared/city";
 import { BIKE_SPEED, Graph, Mode, WALK_SPEED } from "./graph";
 import { OUTDOOR, PLACE_LABEL, Places, type Place, type PlaceKind } from "./places";
-import { generateDayPlan, type CityEvent, type DayPlan } from "./events";
+import { cortege, generateDayPlan, type CityEvent, type DayPlan } from "./events";
 import { createPopulation, PROFILES, type Agent, type Household, type Profile } from "./population";
 import { addOutings, insertOuting, planHousehold } from "./planner";
 import { CSP_LABEL, INCOME_MEDIAN } from "./demographics";
-import type { AgentInfo, DayReport, Policy, Thought } from "./protocol";
+import type { AgentInfo, DayReport, EngineMessage, Policy, Preview, Thought } from "./protocol";
 import { ROAD_FLAGS } from "../shared/city";
 import { WaterMask } from "./water";
-import { EVENT_SPECS, type EventProposal } from "../shared/catalog";
-import { locationXZ } from "../shared/locations";
+import { defaultParams, EVENT_SPECS, isProcession, traitsOf, type EventProposal, type EventTraits } from "../shared/catalog";
+import { crowdSpot, venueLayout, type VenueLayout } from "./venue";
+import { TRANSIT_POOL, VISITOR_POOL, type EventBilan } from "./protocol";
+import { INCOME_MEDIAN as VISITOR_INCOME } from "./demographics";
+import { localCohortResponses, type CohortResponse, type CohortStat, type EventSummary } from "../shared/advisors";
+import { eventGeometry, pointAt, rollingClosure, Zone, type EventGeometry, type RoutePath } from "./eventGeometry";
+import { cohortId, cohortStats, districtOf, isAffected } from "./cohorts";
+import { cellKey } from "./eventGeometry";
+import { DayLog } from "./kpis";
+import { BusNetwork, Parkings } from "./transit";
+import type { Transit } from "../shared/city";
+import type { Leg } from "./population";
 
 /** Un agent simulé représente ce nombre de personnes réelles (trafic, chiffre d'affaires, CO₂). */
 export const AGENT_SCALE = 1;
 const RUN_SPEED = 2.8;
 /** une pensée au plus toutes les 90 minutes par habitant */
 const THOUGHT_COOLDOWN = 90;
+/** bulles affichées au plus par heure simulée, pour toute la ville */
+const BUBBLES_PER_HOUR = 5;
 const CO2_PER_CAR_KM = 0.12;
 
 const SPEND: Partial<Record<PlaceKind, number>> = { food: 16, bar: 11, grocery: 28, shop: 35, culture: 9, sport: 6, lake: 4, event: 12 };
@@ -39,6 +51,69 @@ export interface EngineOptions {
   commuters: number;
   seed: number;
   startDate: Date;
+  /** lignes de bus et parkings (public/transit.json) ; sans eux, ni bus ni stationnement */
+  transit?: Transit;
+}
+
+/** Mode « bus » dans le choix modal (les modes du graphe sont marche, vélo, voiture). */
+const BUS = 4 as Mode;
+
+/** un cortège ou une course se prépare : les participants s'organisent 45 min avant le départ */
+const MOBILIZE = 45;
+
+/** Lieux de loisirs et de courses, que l'on peut annuler ou déplacer. */
+const LEISURE: ReadonlySet<PlaceKind> = new Set(["food", "bar", "grocery", "shop", "culture", "sport", "lake", "park"]);
+
+/** Suivi d'un événement du joueur pendant une journée. */
+interface EventStats {
+  ev: CityEvent;
+  place: Place;
+  seen: Set<number>;
+  residents: number;
+  outsiders: number;
+  peak: number;
+  timeline: number[];
+  ticket: number;
+  visitorCarTrips: number;
+  visitorCarKm: number;
+  visitorTravel: number;
+  visitorArrivals: number;
+  complaints: number;
+  bilanSent: boolean;
+}
+
+/** Décision du joueur, éventuellement sur plusieurs jours. */
+interface Scheduled {
+  sid: number;
+  p: EventProposal;
+  traits: EventTraits;
+  geo: EventGeometry;
+  summary: EventSummary;
+  firstDay: number;
+  lastDay: number;
+  /** début et fin le premier jour, puis les jours suivants (minutes) */
+  firstStart: number;
+  firstEnd: number;
+  start: number;
+  end: number;
+  cohorts: CohortStat[];
+  /** habitants concernés (domicile, trajet ou destination dans la zone), mesurés à la décision */
+  affected: Uint8Array;
+  affectedCount: number;
+  /** réactions des groupes reçues de Claude (null tant qu'elles ne sont pas arrivées) */
+  responses: CohortResponse[] | null;
+  /** réactions déjà appliquées aujourd'hui, pour n'appliquer que la différence */
+  applied: { day: number; byId: Map<string, CohortResponse> } | null;
+  /** journal de la veille du premier jour : la ville sans l'événement */
+  baseline: DayLog | null;
+  analysisSent: boolean;
+  rerouted: number;
+  /** commerces de la zone (piétonnisation) */
+  zoneShops: Place[];
+  /** parkings dans la zone ou à moins de 400 m */
+  parks: number[];
+  /** événement courant de la ville (marché, travaux…) suivi automatiquement, pas une décision du joueur */
+  auto?: boolean;
 }
 
 export const DEFAULT_POLICY: Policy = { parkingPrice: 2.5, bikeComfort: 1, carFriction: 1 };
@@ -54,11 +129,49 @@ export class Engine {
   dayPlan!: DayPlan;
   /** lieu temporaire de chaque événement du jour */
   private eventPlaces = new Map<number, Place>();
-  private closuresApplied = new Set<number>();
   /** pensées émises depuis la dernière trame */
   thoughts: Thought[] = [];
   /** événements du joueur dont la réaction des habitants n'a pas encore eu lieu */
   private pendingReactions: CityEvent[] = [];
+  /** décisions du joueur, par identifiant */
+  private scheduled = new Map<number, Scheduled>();
+  private nextSid = 1;
+  /** messages pour la page (réactions des groupes à demander, analyses, impact) */
+  outbox: EngineMessage[] = [];
+  /** visiteurs extérieurs en réserve, mobilisés par les grands événements */
+  readonly visitors: Agent[] = [];
+  /** véhicules qui traversent Annecy ou viennent livrer */
+  readonly transit: Agent[] = [];
+  /** habitants et visiteurs : tous ceux qui se déplacent et s'affichent */
+  readonly everyone: Agent[];
+  /** grands rassemblements : lieu → aménagement (scène, zone du public) */
+  private venues = new Map<Place, { ev: CityEvent; layout: VenueLayout }>();
+  /** événements du joueur : lieu → suivi de la journée */
+  private stats = new Map<Place, EventStats>();
+  /** visiteur → lieu de l'événement qu'il est venu voir aujourd'hui */
+  private visitorTarget = new Map<number, Place>();
+  /** cortèges et courses : lieu de l'événement → parcours */
+  private routeStays = new Map<Place, { ev: CityEvent; path: RoutePath }>();
+  private closureKey = "";
+  private dangerKey = "";
+  private bubbleHour = -1;
+  private bubbles = 0;
+  /** les itinéraires des bus ont changé (à renvoyer à la page) */
+  transitChanged = true;
+  private closedRoads = new Set<number>();
+  /** zones piétonnes actives (bonus pour les commerces) */
+  private pedestrianZones: Scheduled[] = [];
+  private log = new DayLog();
+  private prevLog: DayLog | null = null;
+  private lastHourLogged = -1;
+  private lastImpact = 0;
+  private readonly genevaExits: Place[];
+  // trafic lissé par rue, pour la couche « trafic »
+  private readonly emaFactor: Float32Array;
+  /** voitures simulées présentes sur chaque rue, et combien elle peut en contenir (file d'attente) */
+  private readonly roadCars: Int16Array;
+  private readonly roadCap: Int16Array;
+  private readonly emaLoad: Float32Array;
   private readonly rand: () => number;
   private readonly startDate: Date;
   private readonly city: City;
@@ -74,7 +187,13 @@ export class Engine {
 
 
   // statistiques du jour
-  private trips = { walk: 0, bike: 0, car: 0 };
+  private trips = { walk: 0, bike: 0, car: 0, bus: 0 };
+  /** réseau de bus Sibra et navettes */
+  readonly bus: BusNetwork | null;
+  readonly parkings: Parkings | null;
+  /** taux d'occupation maximal des parkings aujourd'hui, et nombre de parkings pleins à ce moment */
+  private parkingPeak = 0;
+  private parkingFull = 0;
   /** cumulative home-to-work trips by mode, employed residents only (not reset daily) */
   readonly commuteTrips = { walk: 0, bike: 0, car: 0 };
   private carMeters = 0;
@@ -89,7 +208,15 @@ export class Engine {
     this.graph = new Graph(city);
     this.water = new WaterMask(city);
     this.places = new Places(city, this.graph);
+    this.bus = opts.transit ? new BusNetwork(opts.transit, this.graph) : null;
+    this.parkings = opts.transit ? new Parkings(opts.transit.parkings, this.graph) : null;
     ({ agents: this.agents, households: this.households } = createPopulation(this.places, opts.residents, opts.tourists, opts.commuters, this.rand));
+    for (const a of this.agents) a.district = districtOf(a);
+    this.createVisitors(VISITOR_POOL);
+    this.createTransit(TRANSIT_POOL);
+    this.everyone = [...this.agents, ...this.visitors, ...this.transit];
+    const exits = this.places.list("exit");
+    this.genevaExits = [...exits].sort((a, b) => a.z + a.x - (b.z + b.x)).slice(0, Math.max(1, Math.ceil(exits.length / 3)));
     const g = this.graph, nr = city.roads.length;
     this.roadStorage = new Float32Array(nr);
     for (let e = 0; e < g.to.length; e++) this.roadStorage[g.edgeRoad[e]] += g.storage[e];
@@ -97,6 +224,13 @@ export class Engine {
     this.roadFactor = new Float32Array(nr).fill(1);
     this.obsSum = new Float32Array(nr);
     this.obsW = new Float32Array(nr);
+    this.emaFactor = new Float32Array(nr).fill(1);
+    this.roadCars = new Int16Array(nr);
+    // une voiture simulée = AGENT_SCALE véhicules de 7,5 m (longueur occupée dans une file), toutes voies
+    // (une rue très courte entre deux carrefours garde au moins la place de 4 voitures simulées)
+    // (à l'arrêt dans une file, une voiture occupe ≈ 6 m et non 7,5 m : ×1,25)
+    this.roadCap = Int16Array.from(this.roadStorage, (st) => Math.max(4, Math.floor((st * 1.25) / AGENT_SCALE)));
+    this.emaLoad = new Float32Array(nr);
 
     this.startDay();
   }
@@ -111,15 +245,44 @@ export class Engine {
   startDay(plan?: DayPlan) {
     this.dayPlan = plan ?? generateDayPlan(this.city, this.date, this.rand);
     this.eventPlaces.clear();
+    this.routeStays.clear();
+    this.venues.clear();
+    this.stats.clear();
+    this.parkings?.reset();
+    this.roadCars?.fill(0);
+    this.bus?.clearShuttles();
+    if (this.bus) this.bus.suspended = false;
+    this.visitorTarget.clear();
+    this.pendingReactions = [];
+    this.planTransit();
+    for (const v of this.visitors) {
+      v.plan = [{ place: v.home, until: 1800 }];
+      v.step = 0;
+      v.trip = null;
+      v.tourMode = null;
+      v.x = v.home.x;
+      v.z = v.home.z;
+      v.travelMinutes = v.delayMinutes = v.spentToday = 0;
+    }
     for (const ev of this.dayPlan.events) this.eventPlaces.set(ev.id, this.places.transient("event", ev.x, ev.z, ev.title));
+    // les événements courants de la ville sont mesurés comme les décisions du joueur
+    for (const ev of this.dayPlan.events) if (!ev.byPlayer) this.trackCityEvent(ev);
+    // décisions du joueur qui couvrent aujourd'hui (avant la planification : la météo peut changer)
+    for (const [sid, s] of this.scheduled) {
+      if (s.lastDay < this.day) this.scheduled.delete(sid);
+      else if (s.firstDay === this.day) this.instantiate(s, s.firstStart, s.firstEnd);
+      else if (s.firstDay < this.day) this.instantiate(s, s.start, s.end);
+    }
     const wet = this.dayPlan.weather.kind === "pluie" || this.dayPlan.weather.kind === "neige";
     const ctx = { dow: this.date.getDay(), rand: this.rand, wet };
     for (const hh of this.households) planHousehold(hh, this.places, ctx);
     for (const a of this.agents) {
       // sous la pluie, la plupart renoncent au lac et au parc
       if (wet) for (const act of a.plan) if (OUTDOOR.has(act.place.kind) && this.rand() < 0.7) act.place = a.home;
-      for (const ev of this.dayPlan.events) this.maybeAttend(a, ev);
+      for (const ev of this.dayPlan.events) if (!ev.byPlayer) this.maybeAttend(a, ev);
       addOutings(a, this.places, ctx);
+      a.bias = null;
+      a.parked = -1;
       a.step = 0;
       a.trip = null;
       a.tourMode = null;
@@ -128,12 +291,15 @@ export class Engine {
       a.travelMinutes = a.delayMinutes = a.spentToday = 0;
     }
     for (const p of this.places.all) p.revenue = p.visits = 0;
-    this.trips = { walk: 0, bike: 0, car: 0 };
+    this.trips = { walk: 0, bike: 0, car: 0, bus: 0 };
     this.carMeters = this.carDelay = this.carFree = 0;
     this.hourly = Array.from({ length: 24 }, () => [0, 0, 0]);
     this.obsSum.fill(0);
     this.obsW.fill(0);
     this.minute = 0;
+    this.lastHourLogged = -1;
+    this.lastImpact = 0;
+    this.parkingPeak = this.parkingFull = 0;
   }
 
   /** Insère une visite à l'événement si l'habitant est chez lui à ce moment-là. */
@@ -146,10 +312,22 @@ export class Engine {
   }
 
   /** L'habitant exprime une pensée (bulle au-dessus de sa tête, fil d'actualité). */
-  private think(a: Agent, icon: string, text: string, chance = 1) {
+  /**
+   * L'habitant pense quelque chose : c'est toujours noté dans sa fiche, mais ne s'affiche en bulle et
+   * dans le fil que si c'est en rapport avec un événement (`about`) ou la voix d'un groupe, dans la
+   * limite de quelques bulles par heure : une ville où tout le monde commente tout ne serait pas crédible.
+   */
+  private think(a: Agent, icon: string, text: string, chance = 1, voice?: string, about?: string) {
+    // les véhicules de transit ne sont pas des habitants : pas de bulles
+    if (a.profile === "transit") return;
     if (this.minute - a.lastThought < THOUGHT_COOLDOWN || this.rand() > chance) return;
     a.lastThought = this.minute;
-    this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute) });
+    const h = Math.floor(this.minute / 60);
+    if (h !== this.bubbleHour) [this.bubbleHour, this.bubbles] = [h, 0];
+    if ((about || voice) && this.bubbles < (voice ? BUBBLES_PER_HOUR * 2 : BUBBLES_PER_HOUR)) {
+      this.bubbles++;
+      this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute), ...(voice ? { voice } : {}), ...(about ? { about } : {}) });
+    }
     a.thoughtLog.push({ icon, text, day: this.day, minute: Math.round(this.minute) });
     if (a.thoughtLog.length > 8) a.thoughtLog.shift();
   }
@@ -231,40 +409,254 @@ export class Engine {
     return this.dayPlan.events.find((e) => e.kind === kind && this.minute >= e.start && this.minute < e.end);
   }
 
+  /** Aperçu d'une proposition : rues fermées, parcours, zone. */
+  preview(p: EventProposal): Preview {
+    const g = eventGeometry(this.city, this.graph, p);
+    const roads = g.path && !g.closedRoads.length ? [...new Set(g.path.roads.filter((r) => r >= 0))] : g.closedRoads;
+    return { roads, path: g.path ? flatten(g.path) : null, x: g.x, z: g.z, radius: g.radius };
+  }
+
   /**
-   * Ajoute un événement demandé par le joueur. La météo et les fermetures s'appliquent tout de suite ;
-   * les habitants réagissent au début de l'événement.
+   * Programme une décision du joueur (éventuellement sur plusieurs jours) et demande à la page
+   * la réaction des groupes d'habitants concernés. Renvoie son identifiant.
    */
-  addEvent(p: EventProposal): CityEvent {
-    const spec = EVENT_SPECS[p.kind];
-    // une vague ou une crue frappe la rive, pas le milieu du lac
-    const location = (p.kind === "tsunami" || p.kind === "inondation") && p.location === "Lac d'Annecy" ? "Le Pâquier" : p.location;
-    const [x, z] = locationXZ(location);
-    const intensity = Math.max(1, Math.min(3, p.intensity));
-    const radius = spec.radius * [0, 0.6, 1, 1.7][intensity];
-    const start = Math.min(1439, Math.round(this.minute + Math.max(0, p.startIn)));
-    const closedRoads: number[] = [];
-    if (spec.closesRoads) {
-      this.city.roads.forEach((r, i) => {
-        if (!(r.f & ROAD_FLAGS.CAR)) return;
-        const hit = r.n.some((n) => Math.hypot(this.city.nodes[2 * n] - x, this.city.nodes[2 * n + 1] - z) < Math.max(radius, 40));
-        if (hit) closedRoads.push(i);
-      });
+  addEvent(p: EventProposal): number {
+    const geo = eventGeometry(this.city, this.graph, p);
+    const parsed = parseHHMM(p.startTime);
+    const duration = Math.max(10, Math.min(1440, Math.round(p.durationMinutes)));
+    const days = Math.max(1, Math.min(60, Math.round(p.days)));
+    let firstDay = this.day + Math.max(0, Math.min(14, Math.round(p.dayOffset)));
+    const start = parsed ?? 0;
+    const end = Math.min(1440, start + duration);
+    let firstStart = start, firstEnd = end;
+    if (firstDay === this.day) {
+      const now = Math.ceil(this.minute);
+      if (parsed === null) [firstStart, firstEnd] = [now, Math.min(1440, now + duration)];
+      else if (end <= now + 10) firstDay++; // déjà passé aujourd'hui : dès demain à la même heure
+      else firstStart = Math.max(start, now);
     }
+    // une grève des trains concerne ceux qui prennent le train, pas ceux qui habitent près de la gare
+    const affected = Uint8Array.from(this.agents, (a) =>
+      (p.kind === "greve" ? a.plan.some((act) => act.place.kind === "station") : isAffected(a, geo.zone)) ? 1 : 0);
+    const sid = this.nextSid++;
+    const when = `${firstDay === this.day ? "aujourd'hui" : firstDay === this.day + 1 ? "demain" : `dans ${firstDay - this.day} jours`} à ${hhmm(firstStart)}` +
+      `, ${duration >= 1440 ? "toute la journée" : `${Math.round(duration / 6) / 10} h par jour`}${days > 1 ? `, pendant ${days} jours` : ""}`;
+    const s: Scheduled = {
+      sid, p, geo, traits: traitsOf(p),
+      summary: { kind: p.kind, title: p.title, description: p.description, location: p.location, streets: p.streets, route: p.route, days, when, traits: traitsOf(p) },
+      firstDay, lastDay: firstDay + days - 1, firstStart, firstEnd, start, end,
+      cohorts: [],
+      affected,
+      affectedCount: affected.reduce((n, v) => n + v, 0),
+      responses: null, applied: null, baseline: null, analysisSent: false, rerouted: 0,
+      parks: this.parkings ? this.parkings.list.map((pk, i) => ({ pk, i })).filter(({ pk }) => geo.zone.contains(pk.x, pk.z) || Math.hypot(pk.x - geo.x, pk.z - geo.z) < geo.radius + 400).map(({ i }) => i) : [],
+      zoneShops: p.kind === "pietonnisation" ? this.places.all.filter((pl) => (pl.kind === "shop" || pl.kind === "food" || pl.kind === "bar") && geo.zone.contains(pl.x, pl.z)) : [],
+    };
+    s.cohorts = cohortStats(this.agents, affected, AGENT_SCALE, (a) => a.delayMinutes);
+    this.scheduled.set(sid, s);
+    if (firstDay === this.day) this.instantiate(s, firstStart, firstEnd);
+    this.outbox.push({ type: "cohortRequest", sid, event: s.summary, cohorts: s.cohorts, schedule: { day: firstDay, start: firstStart, end: firstEnd, lastDay: s.lastDay } });
+    return sid;
+  }
+
+  /** Suivi automatique d'un événement courant (marché, concert, travaux, accident) : impact et bilan. */
+  private trackCityEvent(ev: CityEvent) {
+    const sid = this.nextSid++;
+    ev.sid = sid;
+    const p: EventProposal = {
+      ...defaultParams(ev.kind), kind: ev.kind, location: "Centre-ville", streets: [], route: [], dayOffset: 0,
+      startTime: "", durationMinutes: ev.end - ev.start, days: 1, intensity: 2, title: ev.title, description: ev.description,
+      question: "", note: "", source: "local", closesRoads: ev.closedRoads.length > 0,
+    };
+    const traits = traitsOf(p);
+    ev.traits = traits;
+    const zone = new Zone(ev.x, ev.z, Math.max(ev.radius, 120));
+    const geo: EventGeometry = { x: ev.x, z: ev.z, radius: Math.max(ev.radius, 120), closedRoads: ev.closedRoads, path: null, zone };
+    const affected = Uint8Array.from(this.agents, (a) => (isAffected(a, zone) ? 1 : 0));
+    const s: Scheduled = {
+      sid, p, traits, geo, auto: true,
+      summary: { kind: ev.kind, title: ev.title, description: ev.description, location: "", streets: [], route: [], days: 1, when: `aujourd'hui, ${hhmm(ev.start)} – ${hhmm(ev.end)}`, traits },
+      firstDay: this.day, lastDay: this.day, firstStart: ev.start, firstEnd: ev.end, start: ev.start, end: ev.end,
+      cohorts: [], affected, affectedCount: affected.reduce((n, v) => n + v, 0), responses: null, applied: null,
+      baseline: this.prevLog, analysisSent: true, rerouted: 0, zoneShops: [],
+      parks: this.parkings ? this.parkings.list.map((pk, i) => ({ pk, i })).filter(({ pk }) => Math.hypot(pk.x - ev.x, pk.z - ev.z) < geo.radius + 400).map(({ i }) => i) : [],
+    };
+    this.scheduled.set(sid, s);
+    const place = this.eventPlaces.get(ev.id)!;
+    this.stats.set(place, {
+      ev, place, seen: new Set(), residents: 0, outsiders: 0, peak: 0, timeline: [], ticket: 0,
+      visitorCarTrips: 0, visitorCarKm: 0, visitorTravel: 0, visitorArrivals: 0, complaints: 0, bilanSent: false,
+    });
+    this.outbox.push({ type: "cityEvent", sid, event: s.summary, day: this.day });
+  }
+
+  /** Annule une décision : les jours suivants sont supprimés, l'événement en cours s'arrête maintenant. */
+  cancelEvent(sid: number) {
+    this.scheduled.delete(sid);
+    this.dayPlan.events = this.dayPlan.events.filter((ev) => ev.sid !== sid || ev.start < this.minute);
+    for (const ev of this.dayPlan.events) if (ev.sid === sid) ev.end = Math.min(ev.end, Math.max(ev.start + 1, Math.ceil(this.minute)));
+    this.pendingReactions = this.pendingReactions.filter((ev) => ev.sid !== sid);
+  }
+
+  /** Place l'événement du jour correspondant à une décision dans le plan de la journée. */
+  private instantiate(s: Scheduled, start: number, end: number) {
+    const spec = EVENT_SPECS[s.p.kind], g = s.geo, intensity = Math.max(1, Math.min(3, s.p.intensity)), traits = s.traits;
     const ev: CityEvent = {
       id: Math.max(-1, ...this.dayPlan.events.map((e) => e.id)) + 1,
-      kind: p.kind, title: p.title, description: p.description, x, z, start,
-      end: start + Math.max(10, p.durationMinutes),
-      attraction: spec.attraction * (intensity / 2), closedRoads, radius, intensity, byPlayer: true,
+      kind: s.p.kind, title: s.p.title, description: s.p.description, x: g.x, z: g.z, start, end,
+      attraction: traits.attraction * (intensity / 2), closedRoads: g.closedRoads, radius: g.radius, intensity, byPlayer: true, traits,
+      sid: s.sid, dayIndex: this.day - s.firstDay + 1, days: s.lastDay - s.firstDay + 1, streets: s.p.streets,
+      ...(g.path ? { path: flatten(g.path), pathLength: g.path.length } : {}),
     };
     this.dayPlan.events.push(ev);
-    this.eventPlaces.set(ev.id, this.places.transient("event", x, z, ev.title));
+    // grand rassemblement : scène, public et stands sur la terre ferme ; le lieu est au milieu du public
+    const layout = traits.attendance > 0 && traits.needs === "place" && !traits.danger
+      ? venueLayout({ id: ev.id, x: g.x, z: g.z, attendance: traits.attendance, setup: traits.setup }, (x, z) => this.water.isWater(x, z))
+      : null;
+    const place = this.places.transient("event", layout?.crowd.x ?? g.x, layout?.crowd.z ?? g.z, ev.title);
+    this.eventPlaces.set(ev.id, place);
+    if (g.path) this.routeStays.set(place, { ev, path: g.path });
+    if (layout) this.venues.set(place, { ev, layout });
+    this.stats.set(place, {
+      ev, place, seen: new Set(), residents: 0, outsiders: 0, peak: 0, timeline: [], ticket: 0,
+      visitorCarTrips: 0, visitorCarKm: 0, visitorTravel: 0, visitorArrivals: 0, complaints: 0, bilanSent: false,
+    });
+    if (traits.shuttles && this.bus && !traits.danger) {
+      // navette gratuite depuis la gare pendant l'événement
+      const gare = this.places.list("station")[0];
+      this.transitChanged = true;
+      this.bus.addShuttle(`Navette ${ev.title}`, [{ name: "Gare d'Annecy", x: gare.x, z: gare.z }, { name: ev.title, x: place.x, z: place.z }], start, end, 4);
+    }
+    if (traits.attendance > 0 && !traits.danger) {
+      this.bringVisitors(ev, place, traits);
+      // part des habitants à faire venir pour atteindre la fréquentation annoncée (environ 60 % sont disponibles)
+      const wanted = (traits.attendance * (1 - traits.outsiders)) / AGENT_SCALE;
+      ev.attraction = Math.min(0.9, wanted / (this.agents.length * 0.6));
+    }
     if (spec.weather) {
-      const tempC = p.kind === "canicule" ? 33 + intensity * 2 : p.kind === "blizzard" ? -2 - intensity * 3 : this.dayPlan.weather.tempC;
+      const tempC = s.p.kind === "canicule" ? 33 + intensity * 2 : s.p.kind === "blizzard" ? -2 - intensity * 3 : this.dayPlan.weather.tempC;
       this.dayPlan.weather = { kind: spec.weather, tempC };
     }
+    if (this.day === s.firstDay) s.baseline = this.prevLog;
     this.pendingReactions.push(ev);
-    return ev;
+  }
+
+  /** Réserve de visiteurs d'un jour : ils arrivent par les routes d'accès (voiture) ou par le train. */
+  private createVisitors(n: number) {
+    const exits = this.places.list("exit"), station = this.places.list("station")[0];
+    const firsts = this.agents.map((a) => a.name.split(" ")[0]), lasts = this.agents.map((a) => a.name.split(" ").slice(1).join(" "));
+    for (let i = 0; i < n; i++) {
+      const byTrain = !exits.length || this.rand() < 0.25;
+      const home = byTrain ? station : exits[Math.floor(this.rand() * exits.length)];
+      const a = {
+        id: this.agents.length + i,
+        name: `${firsts[Math.floor(this.rand() * firsts.length)]} ${lasts[Math.floor(this.rand() * lasts.length)]}`,
+        profile: "visiteur", age: 18 + Math.floor(this.rand() * 45), sex: this.rand() < 0.5 ? "M" : "F", csp: null, partTime: false,
+        household: null as unknown as Agent["household"],
+        home, work: null, exit: null, hasCar: !byTrain, hasBike: false,
+        needs: { energy: 1, social: 0.5, fun: 0.4 }, habits: new Map(), satisfaction: 0.6,
+        plan: [{ place: home, until: 1800 }], step: 0, tourMode: null, trip: null,
+        x: home.x, z: home.z, heading: 0, travelMinutes: 0, delayMinutes: 0, spentToday: 0,
+        hasDog: false, lastThought: -999, thoughtLog: [],
+        district: "hors Annecy", usualMode: byTrain ? 1 : 3, bias: null, carpoolDay: -1, parked: -1,
+      } as Agent;
+      a.household = { id: -1 - i, kind: "touristes", home, members: [a], cars: byTrain ? 0 : 1, income: VISITOR_INCOME };
+      this.visitors.push(a);
+    }
+  }
+
+  /** Véhicules de transit et de livraison : ils entrent par une route d'accès et ressortent par une autre. */
+  private createTransit(n: number) {
+    const exits = this.places.list("exit");
+    if (!exits.length) return;
+    const base = this.agents.length + this.visitors.length;
+    for (let i = 0; i < n; i++) {
+      const home = exits[Math.floor(this.rand() * exits.length)];
+      const a = {
+        ...this.visitors[0], id: base + i, name: i % 3 ? "Véhicule de transit" : "Livreur", profile: "transit", age: 40, csp: null,
+        home, exit: null, work: null, hasCar: true, plan: [{ place: home, until: 1800 }], habits: new Map(), thoughtLog: [],
+        x: home.x, z: home.z, needs: { energy: 1, social: 0.5, fun: 0.5 }, satisfaction: 0.6, usualMode: 3,
+      } as Agent;
+      a.household = { id: -100000 - i, kind: "touristes", home, members: [a], cars: 1, income: VISITOR_INCOME };
+      this.transit.push(a);
+    }
+  }
+
+  /**
+   * Programme de la journée des véhicules de transit : deux pointes (8 h et 17 h 30) pour la traversée,
+   * le matin pour les livraisons (3 arrêts dans les commerces). Moins de monde le week-end.
+   */
+  private planTransit() {
+    const exits = this.places.list("exit");
+    const dow = this.date.getDay(), weekend = dow === 0 || dow === 6;
+    const shops = [...this.places.list("shop"), ...this.places.list("food"), ...this.places.list("grocery")];
+    const peak = () => {
+      // mélange de deux gaussiennes et d'un fond diurne
+      const u = this.rand();
+      const g = () => (this.rand() + this.rand() + this.rand() - 1.5) * 60;
+      return u < 0.35 ? 8 * 60 + g() : u < 0.7 ? 17.5 * 60 + g() : 7 * 60 + this.rand() * 13 * 60;
+    };
+    for (const a of this.transit) {
+      a.step = 0;
+      a.trip = null;
+      a.tourMode = null;
+      a.x = a.home.x;
+      a.z = a.home.z;
+      a.travelMinutes = a.delayMinutes = a.spentToday = 0;
+      if (this.rand() < (weekend ? 0.55 : 0.1)) {
+        a.plan = [{ place: a.home, until: 1800 }];
+        continue;
+      }
+      if (a.name === "Livreur" && shops.length && !weekend) {
+        let t = 6 * 60 + this.rand() * 5 * 60;
+        a.plan = [{ place: a.home, until: t }];
+        for (let k = 0; k < 3; k++) a.plan.push({ place: shops[Math.floor(this.rand() * shops.length)], until: (t += 25 + this.rand() * 20) });
+        a.plan.push({ place: a.home, until: 1800 });
+        continue;
+      }
+      // traversée : vers une sortie éloignée, parfois retour le soir
+      let to = a.home;
+      for (let k = 0; k < 6 && Math.hypot(to.x - a.home.x, to.z - a.home.z) < 1500; k++) to = exits[Math.floor(this.rand() * exits.length)];
+      const t = Math.max(5 * 60, Math.min(22 * 60, peak()));
+      a.plan = [{ place: a.home, until: t }, { place: to, until: this.rand() < 0.4 ? Math.max(t + 60, 17 * 60 + this.rand() * 120) : 1800 }];
+      if (a.plan[1].until < 1800) a.plan.push({ place: a.home, until: 1800 });
+    }
+  }
+
+  /**
+   * Fait venir les visiteurs extérieurs d'un grand événement : arrivées étalées (surtout au début),
+   * départs groupés à la fin pour un concert, plus dispersés pour une foire. Avec des navettes,
+   * la moitié vient en train.
+   */
+  private bringVisitors(ev: CityEvent, place: Place, traits: EventTraits) {
+    const want = Math.round((traits.attendance * traits.outsiders) / AGENT_SCALE);
+    const free = this.visitors.filter((v) => v.plan.length === 1);
+    const train = free.filter((v) => !v.hasCar), car = free.filter((v) => v.hasCar);
+    const trainShare = traits.shuttles ? 0.5 : 0.2;
+    const pick = [...train.slice(0, Math.round(want * trainShare)), ...car];
+    const stage = !!this.venues.get(place)?.layout.facing;
+    for (const v of pick.slice(0, want)) {
+      const k = this.rand();
+      const arrive = ev.start - 20 + (ev.end - ev.start) * 0.7 * k * k;
+      const leave = stage ? ev.end - this.rand() * this.rand() * 40 : Math.min(ev.end, arrive + 60 + this.rand() * 150);
+      if (leave - arrive < 25) continue;
+      const d = Math.hypot(v.home.x - place.x, v.home.z - place.z) * 1.4;
+      const travel = v.hasCar ? d / 8 / 60 + 12 : d / 1.35 / 60;
+      v.plan = [{ place: v.home, until: Math.max(this.minute, arrive - travel) }, { place, until: leave }, { place: v.home, until: 1800 }];
+      this.visitorTarget.set(v.id, place);
+    }
+  }
+
+  /** Attrait d'un événement selon le public visé. */
+  private interest(a: Agent, t: EventTraits | undefined) {
+    if (!t) return 1;
+    const young = a.profile === "etudiant" || (a.age >= 16 && a.age < 30);
+    switch (t.audience) {
+      case "jeunes": return young ? 2.2 : a.profile === "retraite" || a.profile === "enfant" ? 0.25 : 0.8;
+      case "familles": return a.profile === "enfant" || a.household?.kind === "famille" || a.household?.kind === "monoparentale" ? 1.8 : a.profile === "retraite" ? 0.8 : 0.6;
+      case "seniors": return a.profile === "retraite" ? 2.2 : young ? 0.4 : 0.8;
+      default: return 1;
+    }
   }
 
   /** Lieu sûr hors de la zone : le domicile s'il est épargné, sinon un parc à l'écart. */
@@ -280,13 +672,14 @@ export class Engine {
 
   /** Réaction de la ville au début d'un événement du joueur. */
   private react(ev: CityEvent) {
-    const spec = EVENT_SPECS[ev.kind];
+    const spec = { ...EVENT_SPECS[ev.kind], ...(ev.traits ? { danger: ev.traits.danger, icon: ev.traits.icon, label: ev.traits.label } : {}) };
+    const s = ev.sid !== undefined ? this.scheduled.get(ev.sid) : undefined;
     const place = this.eventPlaces.get(ev.id)!;
     const dist = (x: number, z: number) => Math.hypot(x - ev.x, z - ev.z);
     const inZone = (p: Place) => dist(p.x, p.z) < ev.radius;
     const say = (a: Agent, icon: string, lines: string[], force = false) => {
       if (force) a.lastThought = -999;
-      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)]);
+      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)], 1, undefined, ev.title);
     };
     const wet = spec.weather === "pluie" || spec.weather === "neige";
 
@@ -330,35 +723,362 @@ export class Engine {
 
       if (ev.kind === "panne" && this.rand() < 0.03) say(a, "🕯️", ["Plus de courant… où sont les bougies ?", "Mon frigo va tout décongeler !", "Toute la ville est dans le noir !"], true);
 
-      if (ev.attraction > 0 && free && a.profile !== "pendulaire") {
-        const interest = ev.kind === "ovni" ? (a.profile === "enfant" || a.profile === "etudiant" ? 2 : 1) : ev.kind === "feu_artifice" ? 1.5 : 1;
-        // pas trop loin : les curieux viennent surtout des environs
-        const reach = Math.max(0.15, 1 - d / 3000);
-        if (this.rand() < ev.attraction * interest * reach) {
-          const t = this.minute + 5 + this.rand() * Math.min(60, (ev.end - ev.start) / 2);
-          if (insertOuting(a, place, t, 30 + this.rand() * Math.min(120, ev.end - t))) {
-            if (this.rand() < 0.15) say(a, spec.icon, CURIOUS[ev.kind] ?? [`Je vais voir : ${ev.title} !`], true);
+      if (ev.kind === "greve" && a.profile === "frontalier" && a.exit?.kind === "station") this.strike(a, ev.title);
+
+      // une rue piétonne attire les flâneurs des quartiers voisins
+      if (ev.kind === "pietonnisation" && s?.zoneShops.length && free && d < 1500 && this.rand() < 0.08) {
+        const shop = s.zoneShops[Math.floor(this.rand() * s.zoneShops.length)];
+        insertOuting(a, shop, Math.max(this.minute + 10, 10 * 60 + this.rand() * 8 * 60), 30 + this.rand() * 60);
+      }
+
+      // sans avis des groupes (événements extrêmes), les curieux des environs viennent voir
+      // fréquentation annoncée : elle fixe la venue des habitants ; sinon ce sont les avis des groupes qui décident
+      const byAttendance = (ev.traits?.attendance ?? 0) > 0;
+      if ((byAttendance || !s?.cohorts.length) && ev.attraction > 0 && free && a.profile !== "pendulaire") this.maybeJoin(a, ev, place, ev.attraction * this.interest(a, ev.traits) * (ev.kind === "ovni" && (a.profile === "enfant" || a.profile === "etudiant") ? 2 : 1), spec.icon);
+    }
+
+    if (s) this.applyCohorts(s, ev, s.responses ?? localCohortResponses(s.summary, s.cohorts));
+  }
+
+  /** Grève du Léman Express : télétravail ou covoiturage vers Genève. */
+  private strike(a: Agent, about: string) {
+    const telework = this.rand() < 0.55;
+    const exit = this.genevaExits[a.id % this.genevaExits.length];
+    let changed = false;
+    for (let i = a.step + 1; i < a.plan.length; i++) {
+      if (a.plan[i].place.kind !== "station") continue;
+      a.plan[i].place = telework ? a.home : exit;
+      changed = true;
+    }
+    if (!changed) return;
+    if (!telework) a.carpoolDay = this.day;
+    a.lastThought = -999;
+    this.think(a, telework ? "💻" : "🚘", telework
+      ? ["Pas de Léman Express : télétravail aujourd'hui.", "Grève des trains, je bosse depuis chez moi."][a.id % 2]
+      : ["Grève du Léman Express : je covoiture avec un collègue jusqu'à Genève.", "Covoiturage ce matin, la douane va être chargée."][a.id % 2], 0.4, undefined, about);
+  }
+
+  /** L'habitant décide d'aller voir l'événement, s'il est libre et pas trop loin. */
+  private maybeJoin(a: Agent, ev: CityEvent, place: Place, chance: number, icon: string) {
+    const route = this.routeStays.has(place);
+    // un grand événement annoncé attire de toute la ville, une curiosité surtout les voisins
+    const big = (ev.traits?.attendance ?? 0) > 0;
+    const reach = route ? 1 : Math.max(big ? 0.6 : 0.25, 1 - Math.hypot(a.x - ev.x, a.z - ev.z) / (big ? 8000 : 3000));
+    if (this.rand() >= chance * reach) return false;
+    // un cortège se rejoint au départ ; ailleurs on passe un moment pendant l'événement
+    const t = route
+      ? Math.max(this.minute + 5, ev.start - 25 + this.rand() * 30)
+      : this.minute + 5 + this.rand() * Math.min(big ? 200 : 60, Math.max(0, (ev.end - Math.max(ev.start, this.minute)) / 2));
+    const stage = !!this.venues.get(place)?.layout.facing;
+    const stay = route ? ev.end - t - this.rand() * 15 : stage ? Math.min(ev.end - t, 90 + this.rand() * 180) : 30 + this.rand() * Math.min(120, ev.end - t);
+    if (stay < 20) return false;
+    // on peut quitter le bureau ou l'amphi pour manifester ; sinon il faut être chez soi
+    if (!insertOuting(a, place, t, stay) && !(ev.kind === "manifestation" && this.leaveFor(a, place, t, stay))) return false;
+    if (this.rand() < 0.12) this.think(a, icon, (CURIOUS[ev.kind] ?? GOING[ev.traits?.nature ?? "festif"] ?? [`Je vais voir : ${ev.title} !`])[a.id % 2] ?? `Je vais voir : ${ev.title} !`, 1, undefined, ev.title);
+    return true;
+  }
+
+  /** Quitte le travail ou l'école le temps d'un événement, puis y retourne. */
+  private leaveFor(a: Agent, place: Place, t: number, stay: number): boolean {
+    const i = a.plan.findIndex((act) => act.until > t);
+    if (i < 0 || i < a.step || (i === a.step && a.trip)) return false;
+    const cur = a.plan[i];
+    if (cur.place !== a.work || cur.until < t + stay + 20) return false;
+    a.plan.splice(i, 1, { place: cur.place, until: t }, { place, until: t + stay }, { place: cur.place, until: cur.until });
+    return true;
+  }
+
+  /**
+   * Applique les réactions décidées pour chaque groupe à ses membres, avec de la variabilité individuelle.
+   * Si des réactions ont déjà été appliquées aujourd'hui, seule la différence l'est.
+   */
+  private applyCohorts(s: Scheduled, ev: CityEvent, responses: CohortResponse[]) {
+    const prev = s.applied?.day === this.day ? s.applied.byId : null;
+    const byId = new Map(responses.map((r) => [r.id, r]));
+    const attraction = s.traits.attraction;
+    const zone = s.geo.zone;
+    const place = this.eventPlaces.get(ev.id)!;
+    const speakers = new Map<string, Agent[]>();
+    for (const a of this.agents) {
+      const r = byId.get(cohortId(a));
+      if (!r) continue;
+      const old = prev?.get(r.id);
+      const hit = s.affected[a.id] === 1;
+      const more = (v: number, o = 0) => Math.max(0, v - (old ? o : 0));
+      if (hit) a.bias = { car: r.car, bike: r.bike, walk: r.walk };
+      // départ avancé ou retardé, si la personne n'est pas encore partie
+      const shift = r.departShift - (old?.departShift ?? 0);
+      if (hit && shift && a.step === 0 && !a.trip && a.plan.length > 1 && a.plan[0].until > this.minute) {
+        a.plan[0].until = Math.max(this.minute, a.plan[0].until + shift * (0.5 + this.rand()));
+      }
+      const avoid = r.avoidZone && !old?.avoidZone;
+      const cancel = more(r.cancelLeisure, old?.cancelLeisure);
+      for (let i = a.step + 1; i < a.plan.length; i++) {
+        const act = a.plan[i];
+        if (!LEISURE.has(act.place.kind) || act.place === a.work) continue;
+        if (cancel && this.rand() < cancel) act.place = a.home;
+        else if (avoid && zone.contains(act.place.x, act.place.z)) {
+          for (let k = 0; k < 6; k++) {
+            const alt = this.places.near(act.place.kind, a.home.x, a.home.z, this.rand, 8);
+            if (!zone.contains(alt.x, alt.z)) {
+              act.place = alt;
+              break;
+            }
           }
         }
+      }
+      const join = more(r.joinEvent, old?.joinEvent);
+      if (join > 0 && attraction > 0 && !s.traits.attendance && a.profile !== "pendulaire" && !a.trip) this.maybeJoin(a, ev, place, join * Math.min(1.5, this.interest(a, s.traits)), s.traits.icon);
+      a.satisfaction = clamp01(a.satisfaction + (r.mood - (old?.mood ?? 0)) * (hit ? 0.02 : 0.006));
+      const trivial = !r.mood && !r.departShift && !r.joinEvent && !r.cancelLeisure && !r.avoidZone && Math.abs(r.car) + Math.abs(r.bike) + Math.abs(r.walk) < 0.1;
+      if (r.quote && !trivial && r.quote !== old?.quote && (hit || this.rand() < 0.2)) {
+        let list = speakers.get(r.id);
+        if (!list) speakers.set(r.id, (list = []));
+        if (list.length < 12) list.push(a);
+      }
+    }
+    // deux porte-parole par groupe expriment la réaction collective
+    for (const [id, list] of speakers) {
+      const r = byId.get(id)!;
+      const label = s.cohorts.find((c) => c.id === id)?.label ?? id;
+      for (const a of list.sort(() => this.rand() - 0.5).slice(0, 2)) {
+        a.lastThought = -999;
+        this.think(a, r.mood > 0 ? "😊" : r.mood < 0 ? "😠" : "💬", r.quote, 1, label, ev.title);
+      }
+    }
+    s.applied = { day: this.day, byId };
+  }
+
+  /** Réactions des groupes reçues de Claude : appliquées tout de suite si l'événement a commencé. */
+  setCohortPlan(sid: number, responses: CohortResponse[]) {
+    const s = this.scheduled.get(sid);
+    if (!s) return;
+    s.responses = responses;
+    const ev = this.dayPlan.events.find((e) => e.sid === sid && this.minute >= e.start - (e.path ? MOBILIZE : 0) && this.minute < e.end);
+    if (ev && !this.pendingReactions.includes(ev)) this.applyCohorts(s, ev, responses);
+  }
+
+  /** Rues fermées à cette minute : décisions fixes, et rues autour du cortège qui avance. */
+  private applyClosures() {
+    const set = new Set<number>();
+    this.pedestrianZones = [];
+    for (const ev of this.dayPlan.events) {
+      if (this.minute < ev.start || this.minute >= ev.end) continue;
+      const s = ev.sid !== undefined ? this.scheduled.get(ev.sid) : undefined;
+      if (ev.kind === "pietonnisation" && s) this.pedestrianZones.push(s);
+      if (s?.geo.path && isProcession(ev.kind, s.traits.nature)) {
+        const [head, tail] = cortege(ev, s.geo.path.length, this.minute);
+        for (const r of rollingClosure(s.geo.path, head, tail)) set.add(r);
+        // arrivé au bout, le rassemblement se poursuit à l'arrivée : on y déplace le lieu de l'événement
+        const place = this.eventPlaces.get(ev.id)!;
+        if (head >= s.geo.path.length && place.x === ev.x) this.movePlace(place, s.geo.path.xs.at(-1)!, s.geo.path.zs.at(-1)!);
+      } else for (const r of ev.closedRoads) set.add(r);
+    }
+    this.applyDanger();
+    if (this.bus) this.bus.suspended = this.dayPlan.events.some((ev) => ev.kind === "greve_bus" && this.minute >= ev.start && this.minute < ev.end);
+    const key = [...set].sort((a, b) => a - b).join(",");
+    if (key === this.closureKey) return;
+    this.closureKey = key;
+    this.closedRoads = set;
+    const g = this.graph;
+    for (let e = 0; e < g.to.length; e++) g.closed[e] = set.has(g.edgeRoad[e]) ? 1 : 0;
+    g.updateCarCosts(true);
+    this.rerouteBlocked();
+    // les bus sont déviés eux aussi
+    this.bus?.rebuild();
+    this.transitChanged = true;
+  }
+
+  /**
+   * Zones dangereuses en cours : plus personne n'y passe (tous modes, sauf si c'est la seule issue),
+   * et ceux qui s'y rendaient ou devaient la traverser changent de route sur-le-champ.
+   */
+  private applyDanger() {
+    const zones = this.dayPlan.events.filter((ev) => this.minute >= ev.start && this.minute < ev.end && (ev.traits?.danger ?? EVENT_SPECS[ev.kind].danger));
+    const key = zones.map((ev) => ev.id).join(",");
+    if (key === this.dangerKey) return;
+    this.dangerKey = key;
+    const g = this.graph;
+    const inside = (x: number, z: number) => zones.some((ev) => Math.hypot(x - ev.x, z - ev.z) < ev.radius);
+    const edges: number[] = [];
+    for (let a = 0; a < g.n; a++) {
+      const ina = inside(g.x[a], g.z[a]);
+      for (let e = g.offset[a]; e < g.offset[a + 1]; e++) if (ina || inside(g.x[g.to[e]], g.z[g.to[e]])) edges.push(e);
+    }
+    g.setAvoid(edges, 40);
+    if (!zones.length) return;
+    for (const a of this.everyone) {
+      const t = a.trip;
+      if (!t) continue;
+      const next = a.plan[a.step + 1];
+      const threat = zones.find((ev) => Math.hypot(next.place.x - ev.x, next.place.z - ev.z) < ev.radius);
+      if (threat && next.travel !== "run") {
+        // il se rendait dans la zone : demi-tour vers un lieu sûr
+        next.place = this.safePlace(a, threat, false);
+        if (this.splice(a, next.place)) this.think(a, "⚠️", "Demi-tour, il ne faut surtout pas aller par là !", 0.5, undefined, threat.title);
+        continue;
+      }
+      let crosses = false;
+      for (let i = t.seg + 1; i < t.path.nodes.length && !crosses; i += 3) crosses = inside(g.x[t.path.nodes[i]], g.z[t.path.nodes[i]]);
+      if (crosses && this.splice(a, next.place)) this.think(a, "↪️", "Je fais un détour pour éviter la zone dangereuse.", 0.3, undefined, zones[0].title);
+    }
+  }
+
+  /** Recalcule la fin du trajet en cours vers `dest`, en gardant l'arête où se trouve l'habitant. */
+  private splice(a: Agent, dest: Place): boolean {
+    const t = a.trip!, g = this.graph;
+    const node = t.mode === Mode.Car ? dest.car : t.mode === Mode.Bike ? dest.bike : dest.walk;
+    const detour = g.route(t.path.nodes[t.seg + 1], node, t.mode, true);
+    if (!detour) return false;
+    const nodes = new Int32Array(detour.nodes.length + 1);
+    nodes[0] = t.path.nodes[t.seg];
+    nodes.set(detour.nodes, 1);
+    const edges = new Int32Array(detour.edges.length + 1);
+    edges[0] = t.path.edges[t.seg];
+    edges.set(detour.edges, 1);
+    const cum = new Float32Array(nodes.length);
+    for (let i = 0; i < edges.length; i++) cum[i + 1] = cum[i] + g.len[edges[i]];
+    t.d -= t.path.cum[t.seg];
+    t.seg = 0;
+    t.path = { nodes, edges, cum, length: cum[edges.length] };
+    return true;
+  }
+
+  private movePlace(p: Place, x: number, z: number) {
+    p.x = x;
+    p.z = z;
+    p.walk = this.graph.nearest(x, z, Mode.Walk);
+    p.bike = this.graph.nearest(x, z, Mode.Bike);
+    p.car = this.graph.nearest(x, z, Mode.Car);
+  }
+
+  /** Les automobilistes dont l'itinéraire passe par une rue qui vient de fermer prennent une déviation. */
+  private rerouteBlocked() {
+    const g = this.graph;
+    const closing = this.dayPlan.events
+      .filter((ev) => ev.sid !== undefined && this.minute >= ev.start && this.minute < ev.end && (ev.closedRoads.length || !!ev.path))
+      .map((ev) => this.scheduled.get(ev.sid!))
+      .filter((s): s is Scheduled => !!s);
+    for (const a of this.everyone) {
+      const t = a.trip;
+      if (!t || t.mode !== Mode.Car) continue;
+      let blocked = -1;
+      for (let i = t.seg + 1; i < t.path.edges.length; i++) if (g.closed[t.path.edges[i]]) { blocked = i; break; }
+      if (blocked < 0) continue;
+      if (!this.splice(a, a.plan[a.step + 1].place)) continue;
+      for (const s of closing) s.rerouted += AGENT_SCALE;
+      const name = this.city.roads[g.edgeRoad[t.path.edges[0]]].name;
+      this.think(a, "↪️", name ? `Route barrée, je contourne par ${name}.` : "Route barrée, je prends la déviation.", 0.25, undefined, closing[0]?.p.title ?? this.closureTitle());
+    }
+  }
+
+  /** Journal horaire, impact en direct et analyse des décisions du joueur. */
+  private monitor() {
+    const h = Math.floor(this.minute / 60);
+    if (h !== this.lastHourLogged && h < 24) {
+      this.lastHourLogged = h;
+      const cells = new Map<number, number>();
+      let sat = 0;
+      for (const a of this.everyone) {
+        if (a.profile !== "visiteur") sat += a.satisfaction;
+        if (!a.trip && a.plan[a.step]?.place === a.home) continue;
+        const k = cellKey(a.x, a.z);
+        cells.set(k, (cells.get(k) ?? 0) + 1);
+      }
+      this.log.people[h] = cells;
+      this.log.satisfaction[h] = sat / this.agents.length;
+      if (this.parkings) {
+        const P = this.parkings;
+        const cap = P.list.reduce((s2, p) => s2 + p.capacity, 0), occ = P.occupied.reduce((s2, v) => s2 + v, 0);
+        this.log.parking[h] = P.snapshot();
+        if (occ / cap > this.parkingPeak) {
+          this.parkingPeak = +(occ / cap).toFixed(3);
+          this.parkingFull = P.list.filter((p, i) => P.occupied[i] >= p.capacity - AGENT_SCALE).length;
+        }
+      }
+    }
+    if (this.minute - this.lastImpact < 10) return;
+    this.lastImpact = this.minute;
+    for (const ev of this.dayPlan.events) {
+      const s = ev.sid !== undefined ? this.scheduled.get(ev.sid) : undefined;
+      if (!s || this.minute < ev.start + 15 || this.minute > ev.end + 10) continue;
+      const to = Math.min(this.minute, ev.end), from = Math.max(ev.start, to - 60);
+      const now = this.log.kpis(from, to, s.geo.zone, s.affected, AGENT_SCALE, s.parks);
+      let before = s.baseline?.kpis(from, to, s.geo.zone, s.affected, AGENT_SCALE, s.parks), reference = "hier à la même heure";
+      if (!before || s.baseline!.count(from, to, s.affected) < 10) {
+        before = this.log.kpis(ev.start - 60, ev.start, s.geo.zone, s.affected, AGENT_SCALE, s.parks);
+        reference = "juste avant le début";
+      }
+      const active = this.minute < ev.end;
+      const place = this.eventPlaces.get(ev.id)!;
+      const st = this.stats.get(place);
+      let participants = 0;
+      if (ev.attraction > 0) for (const a of this.everyone) if (!a.trip && a.plan[a.step]?.place === place) participants += AGENT_SCALE;
+      if (st && active && ev.attraction > 0) {
+        st.timeline.push(participants);
+        st.peak = Math.max(st.peak, participants);
+        this.nuisance(st, s);
+      }
+      // bilan de fréquentation : seulement pour un rassemblement (pas une fermeture ni un sinistre)
+      const bilan = st && !active && !s.traits.danger && ev.attraction > 0 ? this.bilan(st, s) : null;
+      this.outbox.push({ type: "impact", impact: { sid: s.sid, title: ev.title, kind: ev.kind, minute: Math.round(this.minute), active, reference, before, now, rerouted: s.rerouted, participants, timeline: st?.timeline ?? [], bilan } });
+      if (st && bilan && !st.bilanSent) {
+        st.bilanSent = true;
+        this.outbox.push({ type: "bilanRequest", sid: s.sid, event: s.summary, bilan });
+      }
+      // l'analyse attend une heure de recul et assez de trajets mesurés (pas en pleine nuit)
+      if (!s.analysisSent && this.minute - ev.start >= Math.min(60, (ev.end - ev.start) * 0.6) && this.log.count(from, to, s.affected) >= Math.min(30, 5 + s.affectedCount * 0.05)) {
+        s.analysisSent = true;
+        this.outbox.push({ type: "analysisRequest", sid: s.sid, event: s.summary, before, after: now, reference });
       }
     }
   }
 
-  /** Ferme ou rouvre les rues des événements selon l'heure. */
-  private applyClosures() {
-    let changed = false;
-    for (const ev of this.dayPlan.events) {
-      if (!ev.closedRoads.length) continue;
-      const active = this.minute >= ev.start && this.minute < ev.end;
-      if (active === this.closuresApplied.has(ev.id)) continue;
-      const roads = new Set(ev.closedRoads);
-      const g = this.graph;
-      for (let e = 0; e < g.to.length; e++) if (roads.has(g.edgeRoad[e])) g.closed[e] = active ? 1 : 0;
-      if (active) this.closuresApplied.add(ev.id);
-      else this.closuresApplied.delete(ev.id);
-      changed = true;
+  /** Riverains gênés par le bruit et la foule, surtout tard le soir près d'une scène. */
+  private nuisance(st: EventStats, s: Scheduled) {
+    const t = s.traits, ev = st.ev;
+    if (ev.attraction <= 0 || t.nature === "perturbation" || t.nature === "danger") return;
+    const late = this.minute >= 22 * 60;
+    const loud = this.venues.get(st.place)?.layout.facing != null;
+    const p = (late ? 0.006 : 0.001) * (loud ? 2 : 0.6) * Math.max(0.1, 1 - t.mood * 0.35);
+    const reach = ev.radius + 250;
+    for (const a of this.agents) {
+      if (a.trip || a.plan[a.step]?.place !== a.home || a.profile === "touriste") continue;
+      if (Math.abs(a.home.x - st.place.x) > reach || Math.abs(a.home.z - st.place.z) > reach) continue;
+      if (Math.hypot(a.home.x - st.place.x, a.home.z - st.place.z) > reach || this.rand() >= p) continue;
+      st.complaints += AGENT_SCALE;
+      a.satisfaction = clamp01(a.satisfaction - 0.01);
+      a.lastThought = -999;
+      this.think(a, "😠", late
+        ? ["Il est presque minuit et la musique résonne encore jusqu'ici…", "Impossible de dormir avec ce concert.", "J'ai des enfants qui dorment, quand même !"][a.id % 3]
+        : ["Plus une place pour se garer dans le quartier.", "Que de monde en bas de chez moi aujourd'hui…", "Les voitures des visiteurs partout sur les trottoirs."][a.id % 3], 0.6, undefined, ev.title);
     }
-    if (changed) this.graph.updateCarCosts(true);
+  }
+
+  /** Bilan d'un événement de la journée, une fois terminé. */
+  private bilan(st: EventStats, s: Scheduled): EventBilan {
+    const ev = st.ev, zone = s.geo.zone, end = Math.min(ev.end, 1440);
+    const during = this.log.kpis(ev.start, end, zone, null, AGENT_SCALE).zoneRevenue - st.place.revenue;
+    const before = s.baseline?.kpis(ev.start, end, zone, null, AGENT_SCALE).zoneRevenue ?? 0;
+    return {
+      attendees: st.residents + st.outsiders, residents: st.residents, outsiders: st.outsiders, peak: st.peak,
+      ticketRevenue: Math.round(st.ticket), onsiteSpend: Math.round(st.place.revenue),
+      zoneRevenue: Math.max(0, Math.round(during)), zoneRevenueBefore: Math.round(before),
+      visitorCarTrips: st.visitorCarTrips, visitorCarKm: Math.round(st.visitorCarKm),
+      co2Tonnes: +((st.visitorCarKm * CO2_PER_CAR_KM) / 1000).toFixed(2),
+      visitorTravel: Math.round(st.visitorTravel / Math.max(1, st.visitorArrivals)),
+      complaints: st.complaints, rerouted: s.rerouted,
+    };
+  }
+
+  /** État du trafic par rue pour la carte : 0 vide, 1 fermée, 2..255 du plus lent au plus fluide. */
+  traffic(): Uint8Array {
+    const out = new Uint8Array(this.city.roads.length);
+    for (let r = 0; r < out.length; r++) {
+      if (this.closedRoads.has(r)) out[r] = 1;
+      else if (this.emaLoad[r] > 0.004) out[r] = 2 + Math.round(clamp01(this.emaFactor[r]) * 253);
+    }
+    return out;
   }
 
   /** Avance jusqu'à `target` minutes (dans la journée courante), par pas d'au plus une minute. */
@@ -373,15 +1093,16 @@ export class Engine {
 
   private step(dtMin: number) {
     for (const ev of [...this.pendingReactions]) {
-      if (this.minute < ev.start) continue;
+      if (this.minute < ev.start - (ev.path ? MOBILIZE : 0)) continue;
       this.pendingReactions.splice(this.pendingReactions.indexOf(ev), 1);
       this.react(ev);
     }
     this.applyClosures();
     this.updateTraffic(dtMin);
+    this.monitor();
     const dtSec = dtMin * 60;
     const hour = Math.min(23, Math.floor(this.minute / 60));
-    for (const a of this.agents) {
+    for (const a of this.everyone) {
       if (a.trip) {
         this.move(a, dtSec);
         if (a.trip) this.hourly[hour][a.trip.mode - 1] += dtMin;
@@ -398,7 +1119,7 @@ export class Engine {
     }
     this.touched.length = 0;
     const g = this.graph;
-    for (const a of this.agents) {
+    for (const a of this.everyone) {
       const t = a.trip;
       if (!t || t.mode !== Mode.Car) continue;
       const r = g.edgeRoad[t.path.edges[t.seg]];
@@ -408,9 +1129,17 @@ export class Engine {
     for (const r of this.touched) {
       const ratio = this.roadLoad[r] / this.roadStorage[r];
       // courbe type BPR : fluide jusqu'à ~40 % d'occupation, puis ralentit fortement
-      this.roadFactor[r] = Math.max(0.08, 1 / (1 + 4 * ratio ** 2.5));
+      // la file d'attente porte déjà la saturation : le ralentissement « fluide → chargé » reste modéré
+      this.roadFactor[r] = Math.max(0.2, 1 / (1 + 1.5 * ratio ** 2.5));
       this.obsSum[r] += this.roadFactor[r] * dtMin;
       this.obsW[r] += dtMin;
+    }
+    // moyenne glissante (~10 min) pour la couche trafic
+    const k = Math.min(1, 0.1 * dtMin);
+    for (let r = 0; r < this.emaLoad.length; r++) {
+      const load = this.roadLoad[r] > 0 ? this.roadLoad[r] / Math.max(1, this.roadStorage[r]) : 0;
+      this.emaLoad[r] += (load - this.emaLoad[r]) * k;
+      this.emaFactor[r] += (this.roadFactor[r] - this.emaFactor[r]) * k;
     }
   }
 
@@ -424,6 +1153,11 @@ export class Engine {
   }
 
   private chooseMode(a: Agent, from: Place, to: Place): Mode {
+    if (a.carpoolDay === this.day) return Mode.Car;
+    // le visiteur venu en train marche depuis la gare (ou prend la navette) ; sinon il vient en voiture
+    // le visiteur venu en train prend la navette s'il y en a une, sinon il marche depuis la gare
+    if (a.profile === "visiteur") return a.hasCar ? Mode.Car : this.bus?.best(from.x, from.z, to.x, to.z, this.minute) ? BUS : Mode.Walk;
+    if (a.profile === "transit") return Mode.Car;
     if (a.profile === "frontalier" || a.profile === "pendulaire") {
       // sans voiture, le frontalier rejoint la gare à vélo ou à pied
       return a.hasCar ? Mode.Car : a.hasBike ? Mode.Bike : Mode.Walk;
@@ -433,13 +1167,24 @@ export class Engine {
     // utilités en « minutes équivalentes » (plus c'est bas, mieux c'est)
     const w = this.dayPlan.weather.kind;
     const wet = w === "pluie" || w === "neige";
-    const options: [Mode, number][] = [[Mode.Walk, (d / WALK_SPEED / 60) * (a.age > 70 ? 1.6 : 1) * (a.age < 11 ? 1.3 : 1) * (wet ? 1.4 : 1) + (d > 2500 ? 30 : 0)]];
-    if (a.hasBike && a.age >= 8) options.push([Mode.Bike, d / BIKE_SPEED / 60 + 4 / this.policy.bikeComfort + (wet ? 12 : 0) + (w === "neige" ? 20 : 0)]);
+    // la marche reste naturelle sous 800 m environ, puis devient vite pénible (enquêtes ménages-déplacements)
+    const walkMin = d / WALK_SPEED / 60;
+    const options: [Mode, number][] = [[Mode.Walk, walkMin * (1 + Math.max(0, d - 800) / 1200) * (a.age > 70 ? 1.6 : 1) * (a.age < 11 ? 1.3 : 1) * (wet ? 1.4 : 1) + (d > 2500 ? 30 : 0)]];
+    // le vélo demande un effort et un équipement : une minorité l'utilise au quotidien (~5 % à Annecy)
+    if (a.hasBike && a.age >= 8) options.push([Mode.Bike, d / BIKE_SPEED / 60 + 11 / this.policy.bikeComfort + (wet ? 15 : 0) + (w === "neige" ? 25 : 0)]);
     if (a.hasCar && a.age >= 18 && a.profile !== "enfant") {
       const parking = centre && to !== a.home ? this.policy.parkingPrice * 4 : 0; // 1 € ≈ 4 min de « valeur »
-      options.push([Mode.Car, (d / 8.5 / 60) * this.policy.carFriction + 6 + parking]);
+      // l'habitude compte : celui qui prend sa voiture tous les jours la reprend
+      options.push([Mode.Car, (d / 8.5 / 60) * this.policy.carFriction + 3 + parking - (a.usualMode === 3 ? 3 : 0)]);
+    }
+    // bus : marche jusqu'à l'arrêt, attente et trajet (sans correspondance)
+    if (this.bus && d > 500 && a.age >= 6) {
+      const b = this.bus.best(from.x, from.z, to.x, to.z, this.minute);
+      if (b) options.push([BUS, b.cost + (a.hasCar ? 6 : 0) - (wet ? 4 : 0)]);
     }
     if (a.profile === "touriste") options[0][1] *= 0.6;
+    // préférences décidées pour son groupe face à un événement (1 point ≈ 12 min de « valeur »)
+    if (a.bias) for (const o of options) if (o[0] !== BUS) o[1] -= 12 * (o[0] === Mode.Car ? a.bias.car : o[0] === Mode.Bike ? a.bias.bike : a.bias.walk);
     // logit
     const beta = 0.25;
     const best = Math.min(...options.map((o) => o[1]));
@@ -459,34 +1204,200 @@ export class Engine {
     if (!style && (a.tourMode === null || from === a.home)) a.tourMode = this.chooseMode(a, from, to);
     let mode = style ? Mode.Walk : a.tourMode!;
     const node = (p: Place, m: Mode) => (m === Mode.Car ? p.car : m === Mode.Bike ? p.bike : p.walk);
+    // trajet composé : stationnement, bus
+    const plan = mode === BUS ? this.busLegs(a, from, to) : mode === Mode.Car && !style ? this.carLegs(a, from, to) : null;
+    if (mode === BUS && !plan) mode = Mode.Walk;
+    const first = plan?.[0];
+    const legs = plan?.slice(1);
+    const fromNode = first?.kind === "move" ? first.from : node(from, mode);
+    const toNode = first?.kind === "move" ? first.to : node(to, mode);
+    let firstMode = first?.kind === "move" ? first.mode : mode;
     // 30 % des automobilistes réévaluent leur itinéraire avec les temps de parcours de la veille
-    let path = this.graph.route(node(from, mode), node(to, mode), mode, this.rand() < 0.3);
+    let path = this.graph.route(fromNode, toNode, firstMode, firstMode === Mode.Car && this.rand() < 0.3);
+    let walkInstead = false;
     if (!path && mode !== Mode.Walk) {
-      mode = Mode.Walk;
+      // pas d'itinéraire (départ sur une rue fermée…) : on y va à pied, et c'est bien un piéton qui se déplace
+      if (mode === Mode.Car) this.releaseParking(a, first);
+      mode = firstMode = Mode.Walk;
       path = this.graph.route(from.walk, to.walk, mode);
+      walkInstead = true;
     }
-    if (!path || path.edges.length === 0) {
+    if (walkInstead && legs) legs.length = 0;
+    if (!path || (path.edges.length === 0 && !legs?.length)) {
       this.arrive(a); // inaccessible ou trop proche : on « téléporte »
       return;
     }
+    if (path.edges.length === 0) path = this.stub(fromNode);
+    if (first?.kind === "move" && first.release !== undefined) this.parkings!.occupied[first.release] -= AGENT_SCALE;
     let free = 0;
     for (const e of path.edges) {
       free += mode === Mode.Car ? this.graph.len[e] / this.graph.carSpeed[e] : this.graph.len[e] / (mode === Mode.Bike ? BIKE_SPEED : WALK_SPEED);
     }
-    a.trip = { path, mode, d: 0, seg: 0, startMinute: this.minute, freeMinutes: free / 60, style };
+    const isBus = mode === BUS;
+    if (isBus) mode = Mode.Walk;
+    a.trip = { path, mode: firstMode === Mode.Car || firstMode === Mode.Walk ? firstMode : mode, d: 0, seg: 0, startMinute: this.minute, freeMinutes: free / 60, style, ...(legs?.length ? { legs } : {}), ...(isBus ? { transit: true } : {}) };
+    if (a.trip.mode === Mode.Car) this.roadCars[this.graph.edgeRoad[path.edges[0]]]++;
+    if (isBus) a.trip.freeMinutes = Math.max(a.trip.freeMinutes, (plan!.find((l) => l.kind === "bus") as Extract<Leg, { kind: "bus" }>).alight - this.minute);
     if (style === "run") a.trip.freeMinutes *= WALK_SPEED / RUN_SPEED;
-    const key = mode === Mode.Car ? "car" : mode === Mode.Bike ? "bike" : "walk";
+    const key = isBus ? "bus" : mode === Mode.Car ? "car" : mode === Mode.Bike ? "bike" : "walk";
     this.trips[key]++;
     // home -> work trips of employed residents (cumulative, for calibration against INSEE)
-    if (to.kind === "work" && from === a.home && !style && (a.profile === "salarie" || a.profile === "commercant")) this.commuteTrips[key]++;
+    if (key !== "bus" && to.kind === "work" && from === a.home && !style && (a.profile === "salarie" || a.profile === "commercant")) this.commuteTrips[key]++;
+    if (!style && from === a.home) a.usualMode = isBus ? 4 : mode;
+    if (a.profile === "visiteur" && mode === Mode.Car) {
+      const st = this.stats.get(this.visitorTarget.get(a.id)!);
+      if (st) {
+        st.visitorCarTrips += AGENT_SCALE;
+        st.visitorCarKm += (path.length / 1000) * AGENT_SCALE;
+      }
+    }
     if (mode === Mode.Car) {
       this.carMeters += path.length;
       this.carFree += free / 60;
     }
   }
 
+  /** Événement en cours à proximité d'un point (pour rattacher une pensée à sa cause), sinon undefined. */
+  private eventNear(x: number, z: number): string | undefined {
+    return this.dayPlan.events.find((ev) => this.minute >= ev.start && this.minute < ev.end && Math.hypot(ev.x - x, ev.z - z) < ev.radius + 600)?.title;
+  }
+
+  /** Fermeture de rue en cours (pour rattacher une plainte de bouchon à sa cause), sinon undefined. */
+  private closureTitle(): string | undefined {
+    return this.dayPlan.events.find((ev) => ev.closedRoads.length && this.minute >= ev.start && this.minute < ev.end)?.title;
+  }
+
+  /** Trajet en voiture abandonné : la place réservée au parking d'arrivée est rendue. */
+  private releaseParking(a: Agent, first: Leg | undefined) {
+    if (a.parked >= 0 && this.parkings && first?.kind === "move" && first.mode === Mode.Car) {
+      this.parkings.occupied[a.parked] -= AGENT_SCALE;
+      a.parked = -1;
+    }
+  }
+
+  /** Trajet d'un nœud à lui-même (étape de durée nulle). */
+  private stub(node: number) {
+    return { nodes: Int32Array.of(node, node), edges: Int32Array.of(this.graph.offset[node]), cum: Float32Array.of(0, 0), length: 0 };
+  }
+
+  /**
+   * Voiture : se garer près de la destination si c'est en ville (parking libre le plus proche, sinon
+   * plus loin, sinon on tourne puis on se gare dans la rue), et repartir du parking où la voiture attend.
+   */
+  private carLegs(a: Agent, from: Place, to: Place): Leg[] | null {
+    const P = this.parkings;
+    if (!P || a.profile === "transit") return null;
+    const legs: Leg[] = [];
+    let start = from.car;
+    let release: number | undefined;
+    if (a.parked >= 0 && from !== a.home) {
+      // retour à la voiture
+      legs.push({ kind: "move", mode: Mode.Walk, from: from.walk, to: P.walk[a.parked] });
+      start = P.car[a.parked];
+      release = a.parked;
+      a.parked = -1;
+    }
+    // au travail on se gare sur le parking de l'entreprise ou dans la rue ; le parking public sert
+    // aux courses, aux loisirs et aux visiteurs, surtout dans l'hypercentre où la rue est saturée
+    const public_ = to !== a.home && to !== a.work && !["exit", "station", "school", "work"].includes(to.kind);
+    const hyper = Math.hypot(to.x, to.z) < 900;
+    if (public_ && (hyper || P.near(to.x, to.z, 350))) {
+      let p = P.find(to.x, to.z, 650, AGENT_SCALE);
+      if (p < 0) p = P.find(to.x, to.z, 1300, AGENT_SCALE);
+      if (p >= 0) {
+        P.occupied[p] += AGENT_SCALE;
+        a.parked = p;
+        legs.push({ kind: "move", mode: Mode.Car, from: start, to: P.car[p], release }, { kind: "move", mode: Mode.Walk, from: P.walk[p], to: to.walk });
+        if (Math.hypot(P.list[p].x - to.x, P.list[p].z - to.z) > 650) this.think(a, "🅿️", `Tout est complet près de ${to.name ?? "ma destination"}, je me gare au ${P.list[p].name}.`, 0.4, undefined, this.eventNear(to.x, to.z));
+        return legs;
+      }
+      // tout est plein : hors de l'hypercentre on finit par trouver une place dans la rue,
+      // dans l'hypercentre on tourne longtemps
+      if (!hyper && this.rand() < 0.7) {
+        legs.push({ kind: "move", mode: Mode.Car, from: start, to: to.car, release });
+        return legs;
+      }
+      P.refused += AGENT_SCALE;
+      this.think(a, "😤", "Impossible de trouver une place, je tourne depuis dix minutes…", 0.5, undefined, this.eventNear(to.x, to.z));
+      legs.push({ kind: "move", mode: Mode.Car, from: start, to: to.car, release }, { kind: "wait", minutes: 6 + this.rand() * 8 });
+      return legs;
+    }
+    if (!legs.length) return null;
+    legs.push({ kind: "move", mode: Mode.Car, from: start, to: to.car, release });
+    return legs;
+  }
+
+  /** Bus : marche jusqu'à l'arrêt, attente, trajet, marche jusqu'à la destination. */
+  private busLegs(a: Agent, from: Place, to: Place): Leg[] | null {
+    const B = this.bus;
+    const b = B?.best(from.x, from.z, to.x, to.z, this.minute);
+    if (!B || !b) return null;
+    const d = B.dirs[b.dir];
+    return [
+      { kind: "move", mode: Mode.Walk, from: from.walk, to: d.stops[b.from].walk },
+      { kind: "bus", dir: b.dir, t0: b.t0, board: b.board, alight: b.alight, from: b.from, to: b.to },
+      { kind: "move", mode: Mode.Walk, from: d.stops[b.to].walk, to: to.walk },
+    ];
+  }
+
+  /** Passe à l'étape suivante d'un trajet composé. */
+  private nextLeg(a: Agent) {
+    const t = a.trip!, leg = t.legs!.shift()!;
+    if (leg.kind !== "move") {
+      // à l'arrêt (bus) ou garé en cherchant une place : on reste en fin d'itinéraire, à pied
+      t.seg = Math.max(0, t.path.edges.length - 1);
+      t.d = t.path.length;
+      t.mode = Mode.Walk;
+    }
+    if (leg.kind === "bus") {
+      t.ride = { dir: leg.dir, t0: leg.t0, board: leg.board, alight: leg.alight, stop: leg.to };
+      return;
+    }
+    if (leg.kind === "wait") {
+      // on tourne en rond : on attend sur place puis on termine le trajet
+      t.ride = { dir: -1, t0: 0, board: this.minute + leg.minutes, alight: this.minute + leg.minutes, stop: -1 };
+      return;
+    }
+    if (leg.release !== undefined) this.parkings!.occupied[leg.release] -= AGENT_SCALE;
+    const path = this.graph.route(leg.from, leg.to, leg.mode, leg.mode === Mode.Car) ?? this.stub(leg.to);
+    Object.assign(t, { path: path.edges.length ? path : this.stub(leg.to), mode: leg.mode, d: 0, seg: 0, blocked: undefined });
+    if (leg.mode === Mode.Car) this.roadCars[this.graph.edgeRoad[t.path.edges[0]]]++;
+    if (leg.mode === Mode.Car) this.carMeters += path.length;
+  }
+
+  /** À l'arrêt de bus (en attente), dans le bus, ou en train de chercher une place. */
+  private riding(a: Agent) {
+    const t = a.trip!, r = t.ride!, B = this.bus;
+    const key = `${r.dir}:${r.t0}`;
+    if (this.minute < r.board) return; // on attend à l'arrêt
+    if (r.dir >= 0 && B) {
+      if (this.minute < r.alight) {
+        if (!B.riders.has(key + ":" + a.id)) {
+          B.riders.set(key + ":" + a.id, 1);
+          B.riders.set(key, (B.riders.get(key) ?? 0) + AGENT_SCALE);
+        }
+        const p = B.position(r.dir, r.t0, this.minute);
+        if (p) [a.x, a.z, a.heading] = p;
+        return;
+      }
+      B.riders.set(key, Math.max(0, (B.riders.get(key) ?? 0) - AGENT_SCALE));
+      B.riders.delete(key + ":" + a.id);
+      const s = B.dirs[r.dir].stops[r.stop];
+      a.x = s.x;
+      a.z = s.z;
+    } else if (this.minute < r.alight) return;
+    t.ride = undefined;
+    if (t.legs?.length) this.nextLeg(a);
+    else this.arrive(a);
+  }
+
   private move(a: Agent, dtSec: number) {
-    const t = a.trip!, g = this.graph, path = t.path;
+    const t = a.trip!, g = this.graph;
+    if (t.ride) {
+      this.riding(a);
+      return;
+    }
+    const path = t.path;
     let time = dtSec;
     while (time > 0) {
       const e = path.edges[t.seg];
@@ -500,11 +1411,29 @@ export class Engine {
         t.d += v * time;
         time = 0;
       } else {
+        if (t.mode === Mode.Car) {
+          // file d'attente : on n'entre sur le tronçon suivant que s'il reste de la place
+          // (après 2 min de blocage on passe quand même, pour éviter un blocage total des carrefours)
+          // (la file est gérée par rue : à l'intérieur d'une rue on avance au rythme du trafic)
+          const r0 = g.edgeRoad[e];
+          const r1 = t.seg + 1 < path.edges.length ? g.edgeRoad[path.edges[t.seg + 1]] : -1;
+          if (r1 !== r0) {
+            if (r1 >= 0 && this.roadCars[r1] >= this.roadCap[r1] && this.minute - (t.blocked ?? this.minute) < 2) {
+              t.blocked ??= this.minute;
+              t.d = path.cum[t.seg + 1];
+              break;
+            }
+            t.blocked = undefined;
+            this.roadCars[r0] = Math.max(0, this.roadCars[r0] - 1);
+            if (r1 >= 0) this.roadCars[r1]++;
+          }
+        }
         t.d = path.cum[t.seg + 1];
         time -= rem / v;
         t.seg++;
         if (t.seg >= path.edges.length) {
-          this.arrive(a);
+          if (t.legs?.length) this.nextLeg(a);
+          else this.arrive(a);
           return;
         }
       }
@@ -526,6 +1455,7 @@ export class Engine {
       const delay = Math.max(0, actual - t.freeMinutes);
       a.delayMinutes += delay;
       if (t.mode === Mode.Car) this.carDelay += delay;
+      if (!t.style) this.log.arrival(this.minute, a.id, t.transit ? 4 : t.mode, actual, t.freeMinutes);
     }
     a.step++;
     const place = a.plan[a.step].place;
@@ -533,10 +1463,30 @@ export class Engine {
     a.z = place.z;
     if (place === a.home) a.tourMode = null;
     const blackout = !!this.active("panne") && place.kind !== "event" && place.kind !== "lake";
-    const spend = blackout ? 0 : (a.age < 12 ? 0 : (SPEND[place.kind] ?? 0)) * this.spendFactor(a) * (a.profile === "touriste" ? 1.5 : 1) * (0.6 + this.rand() * 0.8);
+    // dans une rue piétonne, on flâne plus longtemps et on dépense davantage
+    const pedestrian = this.pedestrianZones.some((s) => s.geo.zone.contains(place.x, place.z));
+    const st = this.stats.get(place);
+    if (st && !st.seen.has(a.id)) {
+      st.seen.add(a.id);
+      if (a.profile === "visiteur") {
+        st.outsiders += AGENT_SCALE;
+        if (t) {
+          st.visitorTravel += this.minute - t.startMinute;
+          st.visitorArrivals++;
+        }
+      } else st.residents += AGENT_SCALE;
+      if (a.age >= 12) st.ticket += (st.ev.traits?.ticket ?? 0) * AGENT_SCALE;
+    }
+    const base = st?.ev.traits ? st.ev.traits.spend : SPEND[place.kind] ?? 0;
+    const spend = blackout ? 0 : (a.age < 12 ? 0 : base) * this.spendFactor(a) * (a.profile === "touriste" ? 1.5 : 1) * (pedestrian ? 1.3 : 1) * (0.6 + this.rand() * 0.8);
     if (spend > 0) {
       place.revenue += spend * AGENT_SCALE;
       a.spentToday += spend;
+      this.log.spend(this.minute, place.x, place.z, spend * AGENT_SCALE);
+    }
+    if (pedestrian && SPEND[place.kind]) {
+      a.needs.fun = clamp01(a.needs.fun + 0.1);
+      this.think(a, "🚶", ["Agréable, cette rue sans voitures.", "On entend enfin les terrasses plutôt que les moteurs.", "Je reste un peu plus longtemps, c'est calme."][a.id % 3], 0.2, undefined, this.pedestrianZones.find((z) => z.geo.zone.contains(place.x, place.z))?.p.title);
     }
     place.visits++;
     const eff = EFFECT[place.kind];
@@ -547,13 +1497,17 @@ export class Engine {
   /** Petites pensées à l'arrivée, selon le trajet et le lieu. */
   private reactToArrival(a: Agent, place: Place, t: Agent["trip"]) {
     const w = this.dayPlan.weather.kind;
+    // pensées du quotidien : seulement dans la fiche de l'habitant ; celles liées à un événement s'affichent
     const say = (icon: string, chance: number, ...lines: string[]) => this.think(a, icon, lines[Math.floor(this.rand() * lines.length)], chance);
+    const sayAbout = (about: string | undefined, icon: string, chance: number, ...lines: string[]) =>
+      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)], chance, undefined, about);
     const delay = t ? this.minute - t.startMinute - t.freeMinutes : 0;
     const spot = place.name ?? "la rive";
     if (t?.mode === Mode.Car && delay > 8) {
       const road = this.slowestRoad(t);
       const d = Math.round(delay);
-      say("😤", 0.8,
+      // un bouchon n'est commenté publiquement que s'il a une cause connue (fermeture, événement)
+      sayAbout(this.closureTitle() ?? this.eventNear(place.x, place.z), "😤", 0.8,
         road ? `${d} min de bouchons ${road}…` : `${d} min perdues dans les bouchons.`,
         road ? `Encore coincé·e ${road}, c'est infernal.` : "La circulation est infernale aujourd'hui.",
         "Il faudrait vraiment que la mairie fasse quelque chose pour le trafic.");
@@ -582,9 +1536,11 @@ export class Engine {
       case "school": if (a.profile === "enfant") say("🎒", 0.1, "Vivement la récré !", "J'ai oublié mes devoirs…"); break;
       case "event": {
         const ev = this.dayPlan.events.find((e) => this.eventPlaces.get(e.id) === place);
-        if (ev?.kind === "marche") say("🧀", 0.6, "Du reblochon au marché, parfait.", "Les fruits du marché sont superbes.", "Le marché de la vieille ville, une institution.");
-        else if (ev?.kind === "concert") say("🎶", 0.7, "Super ambiance au concert !", "Ce groupe est génial.", "Le son porte jusqu'au lac !");
-        else if (ev?.kind === "brocante") say("🪑", 0.6, "Dégoté une vieille lampe à la brocante.", "Que de trésors à la brocante !");
+        const about = ev?.title;
+        if (ev?.kind === "marche") sayAbout(about, "🧀", 0.4, "Du reblochon au marché, parfait.", "Les fruits du marché sont superbes.", "Le marché de la vieille ville, une institution.");
+        else if (ev?.kind === "concert") sayAbout(about, "🎶", 0.5, "Super ambiance au concert !", "Ce groupe est génial.", "Le son porte jusqu'au lac !");
+        else if (ev?.kind === "brocante") sayAbout(about, "🪑", 0.4, "Dégoté une vieille lampe à la brocante.", "Que de trésors à la brocante !");
+        else if (ev?.traits) sayAbout(about, ev.traits.icon, 0.35, ...(ENJOY[ev.traits.nature] ?? [`Sympa, ${place.name}.`]).map((l) => l.replace("{}", ev.title)));
         else say("✨", 0.5, `Sympa, ${place.name}.`);
         break;
       }
@@ -614,6 +1570,16 @@ export class Engine {
   /** Termine la journée : bilan, satisfaction, apprentissage des temps de parcours. */
   endDay(): DayReport {
     this.advanceTo(1440);
+    // événements qui finissent à minuit : bilan avant de tourner la page
+    for (const st of this.stats.values()) {
+      const s = st.ev.sid !== undefined ? this.scheduled.get(st.ev.sid) : undefined;
+      if (!s || st.bilanSent || s.traits.danger || st.ev.attraction <= 0) continue;
+      st.bilanSent = true;
+      const bilan = this.bilan(st, s);
+      this.outbox.push({ type: "bilanRequest", sid: s.sid, event: s.summary, bilan });
+      const k = this.log.kpis(st.ev.start, 1440, s.geo.zone, s.affected, AGENT_SCALE, s.parks);
+      this.outbox.push({ type: "impact", impact: { sid: s.sid, title: st.ev.title, kind: st.ev.kind, minute: 1440, active: false, reference: "fin de journée", before: k, now: k, rerouted: s.rerouted, participants: 0, timeline: st.timeline, bilan } });
+    }
     const bySat: Record<string, number[]> = {};
     for (const a of this.agents) {
       const n = a.needs;
@@ -655,7 +1621,8 @@ export class Engine {
       date: this.date.toISOString().slice(0, 10),
       dow: this.date.getDay(),
       population: this.agents.length * AGENT_SCALE,
-      trips: { walk: this.trips.walk * AGENT_SCALE, bike: this.trips.bike * AGENT_SCALE, car: this.trips.car * AGENT_SCALE },
+      trips: { walk: this.trips.walk * AGENT_SCALE, bike: this.trips.bike * AGENT_SCALE, car: this.trips.car * AGENT_SCALE, bus: this.trips.bus * AGENT_SCALE },
+      parking: this.parkings ? { peak: this.parkingPeak, refused: this.parkings.refused, full: this.parkingFull } : null,
       carKm: Math.round((this.carMeters / 1000) * AGENT_SCALE),
       co2Tonnes: +(((this.carMeters / 1000) * AGENT_SCALE * CO2_PER_CAR_KM) / 1000).toFixed(2),
       congestion: this.carFree > 0 ? +(this.carDelay / this.carFree).toFixed(3) : 0,
@@ -670,11 +1637,19 @@ export class Engine {
       weather: this.dayPlan.weather,
       households: this.households.length,
       meanHouseholdSize: +(this.agents.length / Math.max(1, this.households.length)).toFixed(2),
-      events: this.dayPlan.events.map((e) => ({ kind: e.kind, title: e.title, visits: this.eventPlaces.get(e.id)!.visits * AGENT_SCALE })),
+      events: this.dayPlan.events.map((e) => ({
+        kind: e.kind, title: e.title, visits: this.eventPlaces.get(e.id)!.visits * AGENT_SCALE,
+        icon: e.traits?.icon ?? EVENT_SPECS[e.kind].icon, start: e.start, end: e.end, byPlayer: !!e.byPlayer, ...(e.sid !== undefined ? { sid: e.sid } : {}),
+      })),
     };
-    for (const id of [...this.closuresApplied]) this.closuresApplied.delete(id);
     this.graph.closed.fill(0);
     this.graph.updateCarCosts(true);
+    this.closureKey = "";
+    if (this.dangerKey) this.graph.setAvoid([], 1);
+    this.dangerKey = "";
+    this.closedRoads = new Set();
+    this.prevLog = this.log;
+    this.log = new DayLog();
     this.day++;
     this.startDay();
     return report;
@@ -689,17 +1664,53 @@ export class Engine {
   snapshot(out: Float32Array): number {
     let n = 0;
     const STRIDE = 6, g = this.graph;
-    for (const a of this.agents) {
+    // files d'attente : sur un tronçon chargé, chaque voiture se place derrière la précédente (rang, voie)
+    const queues = new Map<number, Agent[]>();
+    for (const a of this.everyone) {
+      const t = a.trip;
+      if (!t || t.ride || t.mode !== Mode.Car) continue;
+      const e = t.path.edges[t.seg];
+      let q = queues.get(e);
+      if (!q) queues.set(e, (q = []));
+      q.push(a);
+    }
+    const queued = new Map<Agent, [number, number]>();
+    for (const [e, q] of queues) {
+      if (q.length < 2) continue;
+      q.sort((x, y) => y.trip!.d - x.trip!.d);
+      const lanes = Math.max(1, Math.min(3, Math.round((g.storage[e] * 7.5) / (g.len[e] || 1))));
+      // chaque voiture simulée occupe AGENT_SCALE × 7,5 m dans sa voie
+      const L = AGENT_SCALE * 7.5;
+      q.forEach((a, r) => {
+        const t = a.trip!, start = t.path.cum[t.seg];
+        queued.set(a, [start + Math.max(0, Math.min(t.d - start, g.len[e] - Math.floor(r / lanes) * L)), r % lanes]);
+      });
+    }
+    for (const a of this.everyone) {
       if ((n + 1) * STRIDE > out.length) break;
-      let mode = 0, x = a.x, z = a.z, heading = a.heading;
+      let mode = 0, x = a.x, z = a.z, heading = a.heading, extra = 0;
+      // dans le bus (le bus est dessiné) ou garé en train de chercher une place : invisible ; à l'arrêt : debout
+      if (a.trip?.ride) {
+        if (a.trip.ride.dir < 0 || this.minute >= a.trip.ride.board) continue;
+        out.set([x, z, hash01(a.id) * 6.28, 0, PROFILES.indexOf(a.profile), a.id], n++ * STRIDE);
+        continue;
+      }
       if (a.trip) {
         mode = a.trip.style === "run" ? 4 : a.trip.style === "dog" ? 5 : a.trip.mode;
         const e = a.trip.path.edges[a.trip.seg];
         const road = this.city.roads[g.edgeRoad[e]];
         const carRoad = (g.flags[e] & ROAD_FLAGS.CAR) !== 0;
+        const q = queued.get(a);
+        if (q) {
+          // position dans la file plutôt que position « libre » (pas de voitures superposées)
+          const t = a.trip, n0 = t.path.nodes[t.seg], n1 = t.path.nodes[t.seg + 1];
+          const k = (q[0] - t.path.cum[t.seg]) / (g.len[e] || 1);
+          x = g.x[n0] + (g.x[n1] - g.x[n0]) * k;
+          z = g.z[n0] + (g.z[n1] - g.z[n0]) * k;
+        }
         // voitures sur leur voie, vélos au bord, piétons sur le trottoir ; au milieu des chemins piétons
         const lateral =
-          mode === Mode.Car ? road.w / 4 :
+          mode === Mode.Car ? road.w / 4 + (q ? q[1] * 3.2 : 0) :
           mode === Mode.Bike ? (carRoad ? road.w / 2 - 0.8 : 0.5) :
           (a.id % 2 ? 1 : -1) * (carRoad ? road.w / 2 + 1 : Math.min(0.8, road.w / 4));
         const ox = x - Math.cos(heading) * lateral, oz = z + Math.sin(heading) * lateral;
@@ -707,9 +1718,37 @@ export class Engine {
           x = ox;
           z = oz;
         }
+        // les voitures suivantes s'écrivent juste après celle-ci
+        if (mode === Mode.Car) extra = this.followers(a, out, n + 1, q ? q[0] : a.trip.d, q ? q[1] * 3.2 : 0, !!q);
       } else {
         const place = a.plan[a.step]?.place;
         if (!place || !OUTDOOR.has(place.kind)) continue;
+        const venue = this.venues.get(place);
+        if (venue && this.minute < venue.ev.end) {
+          const facing = venue.layout.facing;
+          [x, z] = crowdSpot(venue.layout, hash01(a.id * 7 + 3), hash01(a.id * 5 + 1), (px, pz) => this.water.isWater(px, pz));
+          // face à la scène (mode 6, ils dansent) ; sans scène, ils déambulent en petits groupes (mode 0)
+          heading = facing !== null ? facing + (hash01(a.id * 13) - 0.5) * 0.6 : hash01(a.id * 3 + 2) * Math.PI * 2;
+          mode = facing !== null ? 6 : 0;
+          a.x = x;
+          a.z = z;
+          out.set([x, z, heading, mode, PROFILES.indexOf(a.profile), a.id], n * STRIDE);
+          n++;
+          continue;
+        }
+        const stay = this.routeStays.get(place);
+        if (stay && this.minute < stay.ev.end) {
+          const p = this.onRoute(a, stay.ev, stay.path);
+          if (p) {
+            [x, z, heading, mode] = p;
+            a.x = x;
+            a.z = z;
+            const o = n * STRIDE;
+            out.set([x, z, heading, mode, PROFILES.indexOf(a.profile), a.id], o);
+            n++;
+            continue;
+          }
+        }
         // petits groupes qui discutent autour du point d'accès piéton, toujours sur la terre ferme ;
         // on envoie le centre du groupe et l'angle de la personne autour (le rendu les écarte selon le zoom)
         const ax = g.x[place.walk], az = g.z[place.walk];
@@ -734,9 +1773,82 @@ export class Engine {
       out[o + 3] = mode;
       out[o + 4] = PROFILES.indexOf(a.profile);
       out[o + 5] = a.id;
-      n++;
+      n += 1 + extra;
+    }
+    // bus en circulation : mode 7, « profil » = ligne (couleur), identifiant -1
+    if (this.bus) {
+      for (const { dir, t0 } of this.bus.active(this.minute)) {
+        if ((n + 1) * STRIDE > out.length) break;
+        const p = this.bus.position(dir, t0, this.minute);
+        if (!p) continue;
+        const d = this.bus.dirs[dir];
+        out.set([p[0], p[1], p[2], 7, d.line < 0 ? 99 : d.line, -1], n++ * STRIDE);
+      }
     }
     return n;
+  }
+
+  /**
+   * Une voiture simulée en représente AGENT_SCALE : on dessine les autres en file derrière elle sur
+   * le même itinéraire, collées dans un bouchon, espacées quand ça roule. Profil 100 + k = voiture suiveuse.
+   */
+  private followers(a: Agent, out: Float32Array, start: number, from: number, laneShift: number, queued: boolean): number {
+    let n = start;
+    const t = a.trip!, g = this.graph, p = t.path;
+    const flow = this.roadFactor[g.edgeRoad[p.edges[t.seg]]];
+    // à l'arrêt dans une file, pare-chocs contre pare-chocs ; quand ça roule, distance de sécurité
+    const gap = queued ? 7.5 : 7.5 + 12 * flow;
+    let seg = t.seg;
+    for (let k = 1; k < AGENT_SCALE; k++) {
+      const d = from - k * gap;
+      if (d < 0 || (n + 1) * 6 > out.length) break;
+      while (seg > 0 && p.cum[seg] > d) seg--;
+      const e = p.edges[seg], n0 = p.nodes[seg], n1 = p.nodes[seg + 1];
+      const kk = (d - p.cum[seg]) / (g.len[e] || 1);
+      const heading = Math.atan2(g.x[n1] - g.x[n0], g.z[n1] - g.z[n0]);
+      const lat = this.city.roads[g.edgeRoad[e]].w / 4 + laneShift;
+      const x = g.x[n0] + (g.x[n1] - g.x[n0]) * kk - Math.cos(heading) * lat;
+      const z = g.z[n0] + (g.z[n1] - g.z[n0]) * kk + Math.sin(heading) * lat;
+      if (this.water.isWater(x, z)) continue;
+      out.set([x, z, heading, Mode.Car, 100 + k, a.id], n++ * 6);
+    }
+    return n - start;
+  }
+
+  /**
+   * Position d'un participant sur le parcours : dans le cortège qui avance (manifestation),
+   * en course ou au bord du parcours (course à pied). [x, z, cap, mode] ou null.
+   */
+  private onRoute(a: Agent, ev: CityEvent, path: RoutePath): [number, number, number, number] | null {
+    const u = hash01(a.id * 7 + 3), v = hash01(a.id * 5 + 1);
+    let d: number, mode: number, lateral: number;
+    if (isProcession(ev.kind, ev.traits?.nature ?? "civique")) {
+      const [head, tail] = cortege(ev, path.length, this.minute);
+      if (head <= 0) {
+        // rassemblement : petits groupes sur les premières dizaines de mètres
+        d = u * 70;
+        mode = 0;
+      } else {
+        d = tail + (head - tail) * u;
+        mode = head >= path.length ? 0 : 1;
+      }
+      lateral = (v - 0.5) * 12;
+    } else if (u < 0.65) {
+      // coureurs : 9 à 15 km/h, en boucle sur le parcours
+      const speed = 150 + v * 100;
+      d = this.minute < ev.start ? v * 40 : ((this.minute - ev.start) * speed + v * 120) % path.length;
+      mode = this.minute < ev.start ? 0 : 4;
+      lateral = (hash01(a.id * 11) - 0.5) * 5;
+    } else {
+      // spectateurs le long du parcours
+      d = v * path.length;
+      mode = 0;
+      lateral = (hash01(a.id * 13) < 0.5 ? -1 : 1) * (7 + u * 4);
+    }
+    const [px, pz, heading] = pointAt(path, d);
+    const x = px - Math.cos(heading) * lateral, z = pz + Math.sin(heading) * lateral;
+    if (this.water.isWater(x, z)) return [px, pz, heading, mode];
+    return [x, z, mode === 0 ? hash01(a.id * 3 + 2) * Math.PI * 2 : heading, mode];
   }
 
   /** Household summary and each member's relation to `a`, derived from roles (adult / child) and household kind. */
@@ -765,7 +1877,7 @@ export class Engine {
 
   /** Fiche détaillée d'un habitant, pour l'interface. */
   inspect(id: number): AgentInfo | null {
-    const a = this.agents[id];
+    const a = this.everyone[id];
     if (!a) return null;
     const label = (p: Place) => (p === a.home ? (a.profile === "pendulaire" ? "Domicile (hors zone)" : "Domicile") : p === a.work ? `Travail${p.name ? ` · ${p.name}` : ""}` : p.name ?? PLACE_LABEL[p.kind]);
     const hhmm = (m: number) => `${String(Math.floor(m / 60) % 24).padStart(2, "0")}:${String(Math.floor(m % 60)).padStart(2, "0")}`;
@@ -794,8 +1906,10 @@ export class Engine {
   /** Compteurs en direct pour l'interface. */
   liveCounts() {
     const c = { walk: 0, bike: 0, car: 0, outdoor: 0, outside: 0, run: 0, dog: 0, satisfaction: 0 };
-    for (const a of this.agents) {
-      c.satisfaction += a.satisfaction / this.agents.length;
+    for (const a of this.everyone) {
+      if (a.profile === "visiteur") {
+        if (a.plan.length === 1) continue;
+      } else c.satisfaction += a.satisfaction / this.agents.length;
       if (a.trip?.style) {
         c[a.trip.style]++;
         continue;
@@ -828,6 +1942,24 @@ const CURIOUS: Partial<Record<CityEvent["kind"], string[]>> = {
   marche: ["Je vais faire un tour au marché.", "Des produits frais, parfait."],
   manifestation: ["Il y a du monde dans la rue !", "C'est pour quoi, cette manif ?"],
 };
+/** En route vers un événement, selon sa nature. */
+const GOING: Partial<Record<string, string[]>> = {
+  festif: ["Ce soir on sort, j'ai hâte !", "Tout le monde sera là-bas."],
+  culturel: ["Je ne voulais pas rater ça.", "Ça a l'air passionnant."],
+  sportif: ["Allez, on va encourager !", "J'espère qu'il y aura de l'ambiance."],
+  commercial: ["Je vais faire un tour, on trouve toujours quelque chose.", "Il paraît qu'il y a de bonnes affaires."],
+  civique: ["C'est important d'être présent·e.", "On sera nombreux, j'espère."],
+};
+/** Sur place, selon la nature de l'événement ({} = son nom). */
+const ENJOY: Partial<Record<string, string[]>> = {
+  festif: ["Quelle ambiance à {} !", "Le son est énorme, je ne regrette pas d'être venu·e.", "On danse depuis une heure, génial."],
+  culturel: ["Vraiment réussi, {}.", "Une belle découverte.", "Le cadre au bord du lac est magique."],
+  sportif: ["Quel match ! L'ambiance est folle.", "Bravo aux athlètes !", "Belle organisation, {}."],
+  commercial: ["J'ai trouvé un cadeau, parfait.", "Les exposants sont passionnés.", "Un peu cher, mais sympa."],
+  civique: ["Beaucoup de monde, c'est réconfortant.", "Le message passe bien."],
+  perturbation: ["Quelle galère…"],
+};
+
 const WEATHER_TALK: Partial<Record<CityEvent["kind"], string[]>> = {
   tempete: ["Quelle tempête ! Restez chez vous.", "Les éclairs au-dessus du lac, impressionnant."],
   blizzard: ["Tout est blanc, la ville est paralysée !", "On se croirait au Semnoz !"],
@@ -859,3 +1991,17 @@ export function mulberry32(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+function flatten(path: RoutePath): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < path.xs.length; i++) out.push(Math.round(path.xs[i] * 10) / 10, Math.round(path.zs[i] * 10) / 10);
+  return out;
+}
+
+/** "HH:MM" → minutes, ou null. */
+function parseHHMM(s: string): number | null {
+  const m = /^(\d{1,2})[:h](\d{2})?$/.exec(s.trim());
+  return m ? Math.min(1439, Number(m[1]) * 60 + Number(m[2] ?? 0)) : null;
+}
+
+const hhmm = (m: number) => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;

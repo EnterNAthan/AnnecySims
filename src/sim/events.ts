@@ -37,6 +37,31 @@ export interface CityEvent {
   intensity: number;
   /** créé par le joueur (commande en langage naturel) */
   byPlayer?: boolean;
+  /** identifiant de la décision du joueur (identique sur tous les jours d'un événement de plusieurs jours) */
+  sid?: number;
+  /** jour n sur m pour un événement de plusieurs jours */
+  dayIndex?: number;
+  days?: number;
+  /** rues nommées concernées */
+  streets?: string[];
+  /** comportement résolu (événements du joueur) : icône, nature, fréquentation, décor… */
+  traits?: import("../shared/catalog").EventTraits;
+  /** parcours (cortège, course), aplati [x0, z0, x1, z1…], et sa longueur en m */
+  path?: number[];
+  pathLength?: number;
+}
+
+/**
+ * Cortège d'une manifestation : rassemblement au départ, puis marche au pas jusqu'à l'arrivée.
+ * Renvoie la position de la tête et de la queue sur le parcours, en m.
+ */
+export function cortege(ev: CityEvent, length: number, minute: number): [number, number] {
+  const gather = Math.min(20, (ev.end - ev.start) / 4);
+  const tail = 100 + 70 * ev.intensity;
+  // 1,5 à 3 km/h, pour finir un quart d'heure avant la dispersion
+  const speed = Math.min(50, Math.max(25, length / Math.max(10, ev.end - ev.start - gather - 15)));
+  const head = Math.max(0, Math.min(length, (minute - ev.start - gather) * speed));
+  return [head, Math.max(0, head - tail)];
 }
 
 export interface DayPlan {

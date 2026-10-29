@@ -50,6 +50,8 @@ export class Graph {
   readonly edgeRoad: Int32Array;
   /** arêtes fermées par décision municipale */
   readonly closed: Uint8Array;
+  /** multiplicateur de coût, tous modes : > 1 pour une zone à éviter (danger), 1 sinon */
+  readonly avoid: Float32Array;
   /** nœuds de la plus grande composante, par mode */
   private readonly usable: Record<Mode, Uint8Array>;
   private readonly grid: Record<Mode, Map<number, number[]>>;
@@ -89,6 +91,7 @@ export class Graph {
     this.storage = new Float32Array(m);
     this.learnedFactor = new Float32Array(m).fill(1);
     this.closed = new Uint8Array(m);
+    this.avoid = new Float32Array(m).fill(1);
     this.edgeRoad = new Int32Array(m);
     edges.forEach(([a, b, l, f, speed, lanes, ri], i) => {
       this.edgeRoad[i] = ri;
@@ -191,9 +194,9 @@ export class Graph {
   private computeCosts(mode: Mode, out = new Float32Array(this.to.length)) {
     for (let e = 0; e < out.length; e++) {
       if (!this.allowed(e, mode)) out[e] = Infinity;
-      else if (mode === Mode.Walk) out[e] = this.len[e] / WALK_SPEED;
-      else if (mode === Mode.Bike) out[e] = this.len[e] / (this.flags[e] & ROAD_FLAGS.BIKE ? BIKE_SPEED : BIKE_SPEED * 0.6);
-      else out[e] = this.len[e] / (this.carSpeed[e] * this.learnedFactor[e]);
+      else if (mode === Mode.Walk) out[e] = (this.len[e] / WALK_SPEED) * this.avoid[e];
+      else if (mode === Mode.Bike) out[e] = (this.len[e] / (this.flags[e] & ROAD_FLAGS.BIKE ? BIKE_SPEED : BIKE_SPEED * 0.6)) * this.avoid[e];
+      else out[e] = (this.len[e] / (this.carSpeed[e] * this.learnedFactor[e])) * this.avoid[e];
     }
     return out;
   }
@@ -206,6 +209,18 @@ export class Graph {
     this.computeCosts(Mode.Car, this.costs[Mode.Car]);
     this.carEpoch++;
     if (hard) for (const k of this.cache.keys()) if (k.startsWith("3:")) this.cache.delete(k);
+  }
+
+  /**
+   * Zones à éviter pour tous les modes (danger) : on n'y passe plus sauf si c'est la seule issue.
+   * Tous les itinéraires mémorisés sont oubliés.
+   */
+  setAvoid(edges: Iterable<number>, factor: number) {
+    this.avoid.fill(1);
+    for (const e of edges) this.avoid[e] = factor;
+    for (const m of [Mode.Walk, Mode.Bike, Mode.Car]) this.computeCosts(m, this.costs[m]);
+    this.carEpoch++;
+    this.cache.clear();
   }
 
   /**

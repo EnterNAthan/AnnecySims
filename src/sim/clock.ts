@@ -12,7 +12,8 @@ export class SimClock {
   day = 1;
   /** minutes depuis minuit */
   minute: number;
-  speed = 1;
+  /** vitesse par défaut : ⅓× (une journée en 9 minutes) */
+  speed = 0.33;
   /** 1 seconde réelle = 1 seconde simulée */
   realtime = false;
   paused = false;

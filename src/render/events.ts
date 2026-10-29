@@ -2,7 +2,14 @@
 import * as THREE from "three";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { City } from "../shared/city";
-import { EVENT_ICON, type CityEvent, type DayPlan, type EventKind } from "../sim/events";
+import { cortege, EVENT_ICON, type CityEvent, type DayPlan, type EventKind } from "../sim/events";
+import { ribbon } from "./cityMeshes";
+import { buildVenue } from "./venue";
+import { buildModel } from "./model";
+import { buildAssets } from "./assets";
+import { defaultAssets } from "../shared/localInterpreter";
+import { venueLayout } from "../sim/venue";
+import { WaterMask } from "../sim/water";
 import { earthquake, fire, fireworks, flood, meteorite, picnic, tsunami, ufo, type Animate, type FxHost } from "./disasters";
 
 const KIND_COLOR: Record<EventKind, string> = {
@@ -10,6 +17,13 @@ const KIND_COLOR: Record<EventKind, string> = {
   manifestation: "#4fc3ff", brocante: "#9ccc65", meteorite: "#ff6a1a", inondation: "#3d9bff", tsunami: "#1f7dff",
   tempete: "#8a93a6", incendie: "#ff4a12", seisme: "#c79b5b", panne: "#ffe14d", ovni: "#7dff8a", canicule: "#ff9a3c",
   blizzard: "#dff3ff", feu_artifice: "#ff4dc4", pique_nique: "#ff5a5a",
+  fermeture: "#ff4d4d", pietonnisation: "#5fd08a", marathon: "#ffd84d", greve: "#c0c8d4",
+  festival_musique: "#ff3d9a", fete_musique: "#b06bff", fete_foraine: "#ffb020", marche_noel: "#e8343f",
+  cinema_plein_air: "#5ab0ff", salon: "#3fc1a5", carnaval: "#ff7a2e", competition: "#ffd84d", evenement: "#6cc3ff", greve_bus: "#c0c8d4",
+};
+
+const NATURE_COLOR: Record<string, string> = {
+  festif: "#ff3d9a", culturel: "#5ab0ff", sportif: "#ffd84d", commercial: "#3fc1a5", civique: "#4fc3ff", perturbation: "#ff8a1f", danger: "#ff3b3b",
 };
 
 export const hhmm = (m: number) => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;
@@ -29,20 +43,33 @@ interface EventVisual {
   ring: THREE.Mesh;
   /** décor visible seulement pendant l'événement */
   props: THREE.Group;
-  /** éléments animés (projecteurs, gyrophares) */
-  animate?: (t: number, night: number) => void;
+  /** éléments animés (projecteurs, gyrophares, cortège) */
+  animate?: (t: number, night: number, minute: number) => void;
   /** effet spectaculaire, animé en temps réel depuis son déclenchement */
   fx?: Animate;
   /** instant réel (s) où l'événement est devenu actif à l'écran */
   shownSince?: number;
+  /** décor complet : pas d'anneau pulsant */
+  venue?: boolean;
 }
 
 export class EventsView {
   readonly group = new THREE.Group();
   private visuals: EventVisual[] = [];
+  private readonly water: WaterMask;
 
   constructor(private readonly city: City, private readonly host: FxHost) {
     this.group.name = "events";
+    this.water = new WaterMask(city);
+  }
+
+  /** Nombre de personnes présentes, affiché sous le titre de l'événement. */
+  setPresence(sid: number, people: number) {
+    for (const v of this.visuals) {
+      if (v.ev.sid !== sid) continue;
+      const el = v.label.element.querySelector<HTMLElement>(".presence");
+      if (el) el.textContent = people ? `👥 ${people.toLocaleString("fr-FR")} présents` : "";
+    }
   }
 
   /** Remplace les événements affichés ; ceux déjà présents (même id) gardent leur animation en cours. */
@@ -54,6 +81,7 @@ export class EventsView {
       const old = keep.get(key);
       if (old) {
         keep.delete(key);
+        old.ev = ev; // horaires à jour (événement annulé ou prolongé)
         next.push(old);
       } else next.push(this.build(ev));
     }
@@ -70,11 +98,13 @@ export class EventsView {
   }
 
   private build(ev: CityEvent): EventVisual {
-    const color = KIND_COLOR[ev.kind];
+    const color = ev.kind === "evenement" && ev.traits ? NATURE_COLOR[ev.traits.nature] ?? KIND_COLOR.evenement : KIND_COLOR[ev.kind];
+    const icon = ev.traits?.icon ?? EVENT_ICON[ev.kind];
     const el = document.createElement("div");
     el.className = ev.byPlayer ? "event-label player" : "event-label";
     el.style.setProperty("--c", color);
-    el.innerHTML = `<span class="icon">${EVENT_ICON[ev.kind]}</span><span><b>${ev.title}</b><small>${hhmm(ev.start)} – ${hhmm(ev.end)}</small></span>`;
+    const when = ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`;
+    el.innerHTML = `<span class="icon">${icon}</span><span><b>${ev.title}</b><small>${when}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small><small class="presence"></small></span>`;
     const label = new CSS2DObject(el);
     // au-dessus des effets en hauteur (soucoupe, gerbes)
     label.position.set(ev.x, ev.kind === "ovni" ? 230 : ev.kind === "feu_artifice" ? 320 : 45, ev.z);
@@ -87,9 +117,23 @@ export class EventsView {
 
     const props = new THREE.Group();
     const visual: EventVisual = { ev, label, ring, props };
+    // grand rassemblement : décor complet, même aménagement que celui de la simulation
+    const t = ev.traits;
+    if (t && t.attendance > 0 && t.needs === "place" && !t.danger) {
+      const isWater = (x: number, z: number) => this.water.isWater(x, z);
+      const layout = venueLayout({ id: ev.id, x: ev.x, z: ev.z, attendance: t.attendance, setup: t.setup }, isWater);
+      const venue = buildVenue(layout, t.setup, color, isWater);
+      props.add(venue.group);
+      visual.animate = (time, night) => venue.animate(time, night);
+      label.position.set(layout.x, 45, layout.z);
+      ring.position.set(layout.crowd.x, 0.8, layout.crowd.z);
+      ring.visible = false;
+      visual.venue = true;
+    }
     if (ev.kind === "marche" || ev.kind === "brocante") this.stalls(ev, props);
     if (ev.kind === "concert" || ev.kind === "festival") visual.animate = this.stage(ev, props, color);
-    if (ev.closedRoads.length) this.closure(ev, props, color);
+    if (ev.closedRoads.length) this.closure(ev, props, color, ev.kind !== "pietonnisation");
+    if (ev.path) visual.animate = this.route(ev, props, color);
     if (ev.kind === "accident") visual.animate = this.beacon(ev, props);
     if (ev.kind === "meteorite") visual.fx = meteorite(ev, props, this.host);
     if (ev.kind === "incendie") visual.fx = fire(ev.x, ev.z, 25 + ev.intensity * 15, props);
@@ -102,6 +146,30 @@ export class EventsView {
     // pour les grands phénomènes, l'anneau délimite la zone touchée
     if (ev.radius > 100 && ev.radius < 2000) ring.scale.setScalar(ev.radius / 30);
 
+    // objets de la banque de modèles 3D choisis pour rendre l'événement lisible
+    // (les événements courants de la ville, sans choix de Claude, ont un équipement par défaut)
+    const bank = t?.assets.length ? t.assets : defaultAssets(ev.kind);
+    if (bank.length) {
+      const isWater = (x: number, z: number) => this.water.isWater(x, z);
+      const assets = buildAssets(bank, ev.x, ev.z, Math.max(40, Math.min(ev.radius, 200)), ev.id + 1, isWater);
+      props.add(assets.group);
+      const previous = visual.animate;
+      visual.animate = (time, night, minute) => {
+        previous?.(time, night, minute);
+        assets.animate(time);
+      };
+    }
+    // chose sur mesure (créature, objet géant…) dessinée par Claude
+    if (t?.model) {
+      const model = buildModel(t.model, ev.x, ev.z);
+      props.add(model.group);
+      const previous = visual.animate;
+      visual.animate = (time, night, minute) => {
+        previous?.(time, night, minute);
+        model.animate(time, night);
+      };
+      label.position.set(ev.x, model.height + 25, ev.z);
+    }
     this.group.add(label, ring, props);
     return visual;
   }
@@ -155,7 +223,7 @@ export class EventsView {
   }
 
   /** Rue fermée : surlignée, avec des cônes de chantier. */
-  private closure(ev: CityEvent, props: THREE.Group, color: string) {
+  private closure(ev: CityEvent, props: THREE.Group, color: string, withCones = true) {
     const pts: THREE.Vector3[] = [];
     const cones: THREE.Vector3[] = [];
     for (const r of ev.closedRoads) {
@@ -185,14 +253,68 @@ export class EventsView {
     const coneMesh = new THREE.InstancedMesh(new THREE.ConeGeometry(0.6, 1.6, 6), new THREE.MeshLambertMaterial({ color: "#ff7a00", emissive: "#ff5a00", emissiveIntensity: 0.4 }), Math.max(1, cones.length));
     const m = new THREE.Matrix4();
     cones.forEach((p, i) => coneMesh.setMatrixAt(i, m.makeScale(2.5, 2.5, 2.5).setPosition(p.x, 2, p.z)));
-    coneMesh.count = cones.length;
+    coneMesh.count = withCones ? cones.length : 0;
     props.add(line, ribbon, coneMesh);
+  }
+
+  /**
+   * Parcours d'un cortège ou d'une course : tracé au sol, départ et arrivée, et pour une manifestation
+   * une banderole qui suit la tête du cortège.
+   */
+  private route(ev: CityEvent, props: THREE.Group, color: string) {
+    const path = ev.path!;
+    const pts: [number, number][] = [];
+    for (let i = 0; i < path.length; i += 2) pts.push([path[i], path[i + 1]]);
+    const line = new THREE.Mesh(ribbon([{ pts, w: 6 }], 1.1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, depthWrite: false }));
+    props.add(line);
+    const flag = (x: number, z: number, text: string) => {
+      const el = document.createElement("div");
+      el.className = "route-flag";
+      el.style.setProperty("--c", color);
+      el.textContent = text;
+      const o = new CSS2DObject(el);
+      o.position.set(x, 14, z);
+      props.add(o);
+      return o;
+    };
+    const [x0, z0] = pts[0], [x1, z1] = pts[pts.length - 1];
+    const loop = Math.hypot(x1 - x0, z1 - z0) < 60;
+    flag(x0, z0, loop ? "🏁 Départ / arrivée" : "🚩 Départ");
+    if (!loop) flag(x1, z1, "🏁 Arrivée");
+    if (ev.kind !== "manifestation") return undefined;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const at = (d: number): [number, number] => {
+      let i = 1;
+      while (i < cum.length - 1 && cum[i] < d) i++;
+      const k = Math.max(0, Math.min(1, (d - cum[i - 1]) / (cum[i] - cum[i - 1] || 1)));
+      return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * k, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * k];
+    };
+    const banner = flag(x0, z0, "📣 Tête du cortège");
+    banner.element.classList.add("banner");
+    // segment du parcours occupé par le cortège
+    const body = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, depthWrite: false }));
+    props.add(body);
+    let lastKey = "";
+    return (_t: number, _night: number, minute = ev.start) => {
+      const [head, tail] = cortege(ev, ev.pathLength ?? cum[cum.length - 1], minute);
+      const [hx, hz] = at(head);
+      banner.position.set(hx, 16, hz);
+      const key = `${Math.round(head / 5)}:${Math.round(tail / 5)}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      const seg: [number, number][] = [at(tail)];
+      for (let i = 0; i < pts.length; i++) if (cum[i] > tail && cum[i] < head) seg.push(pts[i]);
+      seg.push([hx, hz]);
+      body.geometry.dispose();
+      body.geometry = ribbon([{ pts: seg, w: 14 }], 1.3);
+    };
   }
 
   /** Gyrophare clignotant au-dessus de l'accident. */
   private beacon(ev: CityEvent, props: THREE.Group) {
-    const blue = new THREE.Mesh(new THREE.SphereGeometry(4, 10, 8), new THREE.MeshBasicMaterial({ color: "#3d7bff", transparent: true }));
-    const orange = new THREE.Mesh(new THREE.SphereGeometry(4, 10, 8), new THREE.MeshBasicMaterial({ color: "#ff9a1f", transparent: true }));
+    const blue = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 8), new THREE.MeshBasicMaterial({ color: "#3d7bff", transparent: true }));
+    const orange = new THREE.Mesh(new THREE.SphereGeometry(1.2, 10, 8), new THREE.MeshBasicMaterial({ color: "#ff9a1f", transparent: true }));
     blue.position.set(ev.x - 5, 10, ev.z);
     orange.position.set(ev.x + 5, 10, ev.z);
     props.add(blue, orange);
@@ -216,8 +338,8 @@ export class EventsView {
         const base = v.ev.radius > 100 && v.ev.radius < 2000 ? v.ev.radius / 30 : 1;
         const k = base * (1 + 0.08 * Math.sin(time * 3));
         v.ring.scale.set(k, 1, k);
-        v.ring.visible = v.ev.radius < 2000;
-        v.animate?.(time, night);
+        v.ring.visible = v.ev.radius < 2000 && !v.ev.path && !v.venue;
+        v.animate?.(time, night, minute);
         v.shownSince ??= time;
         v.fx?.(time - v.shownSince, time, night);
       }
