@@ -29,10 +29,11 @@ async function main() {
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
   const send = (msg: ToWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);
-  const ready = new Promise<void>((resolve) => {
+  const ready = new Promise<void>((resolve, reject) => {
+    worker.addEventListener("error", (event) => reject(new Error(event.message || "Le moteur de simulation ne démarre pas")), { once: true });
     worker.addEventListener("message", (e: MessageEvent<FromWorker>) => e.data.type === "ready" && resolve(), { once: true });
   });
-  send({ type: "init", residents, tourists, commuters, seed: 2026, startDate: startDate.toISOString() });
+  send({ type: "init", residents, tourists, commuters, seed: 2026, startDate: startDate.toISOString(), aiEnabled: params.get("ai") !== "off" });
 
   const city: City = await fetch("/city.json").then((r) => r.json());
   const world = new World($("#app"));
@@ -305,4 +306,11 @@ function renderReport(r: DayReport) {
     </details>`;
 }
 
-main();
+main().catch((error) => {
+  console.error("Démarrage du simulateur impossible", error);
+  const loading = document.querySelector<HTMLElement>("#loading");
+  if (loading) {
+    loading.style.display = "block";
+    loading.textContent = `Démarrage impossible : ${error instanceof Error ? error.message : String(error)}. Recharge la page ou essaie /?ai=off.`;
+  }
+});

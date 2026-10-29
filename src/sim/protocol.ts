@@ -41,7 +41,7 @@ export interface DayReport {
 }
 
 export interface AgentInfo {
-  intelligence?: { status: string; memories: string[] };
+  intelligence?: { status: string; memories: string[]; goal?: string; plan?: string[] };
   id: number;
   name: string;
   age: number;
@@ -94,7 +94,7 @@ export interface Thought {
 }
 
 export type ToWorker =
-  | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string }
+  | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string; aiEnabled?: boolean }
   /** avance jusqu'à `minute` du jour `day` ; renvoie le buffer pour réutilisation */
   | { type: "tick"; day: number; minute: number; buffer: ArrayBuffer }
   | { type: "inspect"; id: number }

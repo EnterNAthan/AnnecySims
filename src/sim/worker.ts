@@ -16,7 +16,7 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   if (msg.type === "init") {
     const city: City = await fetch("/city.json").then((r) => r.json());
     engine = new Engine(city, { ...msg, startDate: new Date(msg.startDate) });
-    intelligence = new Intelligence(engine, (entry) => post({ type: "aiLog", entry }));
+    intelligence = msg.aiEnabled === false ? null : new Intelligence(engine, (entry) => post({ type: "aiLog", entry }));
     const places: Record<string, number> = {};
     for (const [k, list] of engine.places.byKind) places[k] = list.length;
     post({ type: "ready", agents: engine.agents.length, places });

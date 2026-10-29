@@ -7,6 +7,11 @@ import { EVENT_KINDS, EVENT_SPECS, type EventKind } from "../shared/catalog";
 export type { EventKind };
 export type WeatherKind = "soleil" | "nuageux" | "pluie" | "neige";
 
+// Prototype sans précipitations ; conserver les types pour les événements explicites.
+function dryWeather(kind: WeatherKind): WeatherKind {
+  return kind === "pluie" || kind === "neige" ? "nuageux" : kind;
+}
+
 export interface Weather {
   kind: WeatherKind;
   tempC: number;
@@ -78,6 +83,7 @@ export function generateDayPlan(city: City, date: Date, rand: () => number): Day
   let kind: WeatherKind = r < pSun ? "soleil" : r < pSun + pCloud ? "nuageux" : r < pSun + pCloud + pRain ? "pluie" : "nuageux";
   const tempC = Math.round(tMin + (tMax - tMin) * (0.3 + rand() * 0.6));
   if (kind === "pluie" && tempC <= 1) kind = "neige";
+  kind = dryWeather(kind);
 
   const events: CityEvent[] = [];
   const add = (e: Omit<CityEvent, "id" | "radius" | "intensity">) => events.push({ radius: EVENT_SPECS[e.kind].radius, intensity: 2, ...e, id: events.length });
