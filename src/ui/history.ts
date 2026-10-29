@@ -20,6 +20,11 @@ export class HistoryPanel {
     decisions.onChange = () => this.refresh();
     $("#history-open").onclick = () => this.toggle(true);
     this.el.addEventListener("click", (e) => {
+      const ask = (e.target as HTMLElement).closest<HTMLElement>("[data-ask]");
+      if (ask) {
+        this.decisions.requestReport(Number(ask.dataset.ask));
+        return;
+      }
       const t = (e.target as HTMLElement).closest<HTMLElement>("[data-h]");
       if (!t) return;
       const a = t.dataset.h!;
@@ -58,7 +63,7 @@ export class HistoryPanel {
       <div class="h-head">
         <h2>📚 Historique de la ville</h2>
         <div class="seg">
-          <button data-h="tab-events" class="${this.tab === "events" ? "active" : ""}">Événements (${decisions.length + this.cityEvents().length})</button>
+          <button data-h="tab-events" class="${this.tab === "events" ? "active" : ""}">Événements (${decisions.length})</button>
           <button data-h="tab-days" class="${this.tab === "days" ? "active" : ""}">Journées (${this.days.length})</button>
         </div>
         <button data-h="close" class="h-close" title="Fermer (Échap)">✕</button>
@@ -78,7 +83,7 @@ export class HistoryPanel {
   /** Petits graphiques jour par jour, avec les décisions du joueur en repère. */
   private trends() {
     if (this.days.length < 2) return `<div class="muted small h-trends-empty">Les tendances apparaîtront après deux journées complètes.</div>`;
-    const decisionDays = new Set(this.decisions.all().map((d) => d.day));
+    const decisionDays = new Set(this.decisions.all().filter((d) => !d.auto).map((d) => d.day));
     const chart = (label: string, values: number[], format: (v: number) => string, good: 1 | -1) => {
       const w = 220, h = 44, min = Math.min(...values), max = Math.max(...values), span = max - min || 1;
       const x = (i: number) => (i / (values.length - 1)) * w, y = (v: number) => h - 4 - ((v - min) / span) * (h - 8);
@@ -100,7 +105,7 @@ export class HistoryPanel {
   }
 
   private eventList() {
-    const decisions = this.decisions.all();
+    const decisions = this.decisions.all().filter((d) => !d.auto);
     const rows: string[] = [];
     if (decisions.length) rows.push(`<div class="sub">🏛️ Vos décisions</div>`);
     for (const d of decisions) {
@@ -112,12 +117,14 @@ export class HistoryPanel {
         <span><b>${d.event.title}</b><small>jour ${d.day} · ${d.cancelled ? "annulé" : d.report ? d.report.verdict : i?.active ? "en cours" : i ? "terminé" : d.event.when}</small></span>
         <em>${fig}</em></button>`);
     }
-    const city = this.cityEvents();
+    const city = this.decisions.all().filter((d) => d.auto);
     if (city.length) rows.push(`<div class="sub">🏙️ Vie de la ville</div>`);
-    for (const { r, e, index } of city.slice().reverse()) {
-      const sel = this.selection?.type === "city" && this.selection.day === r.day && this.selection.index === index;
-      rows.push(`<button class="h-row ${sel ? "sel" : ""}" data-h="city" data-day="${r.day}" data-index="${index}">
-        <span class="h-icon">${e.icon}</span><span><b>${e.title}</b><small>jour ${r.day} · ${dayName(r)}</small></span><em>${e.visits ? `👥 ${fmt(e.visits)}` : ""}</em></button>`);
+    for (const d of city) {
+      const sel = this.selection?.type === "decision" && this.selection.sid === d.sid;
+      const i = d.impact, b = d.bilan;
+      const fig = b ? `👥 ${fmt(b.attendees)}` : i ? `trajets ${i.now.tripMinutes >= i.before.tripMinutes ? "+" : ""}${Math.round((i.now.tripMinutes / Math.max(0.1, i.before.tripMinutes) - 1) * 100)} %` : "";
+      rows.push(`<button class="h-row ${sel ? "sel" : ""}" data-h="decision" data-sid="${d.sid}">
+        <span class="h-icon">${d.event.traits?.icon ?? "📍"}</span><span><b>${d.event.title}</b><small>jour ${d.day} · ${i?.active ? "en cours" : i ? "terminé" : d.event.when}</small></span><em>${fig}</em></button>`);
     }
     return rows.join("") || `<div class="muted small">Aucun événement pour l'instant.</div>`;
   }

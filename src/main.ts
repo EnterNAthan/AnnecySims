@@ -13,6 +13,8 @@ import { setupCommandBar } from "./ui/command";
 import { DecisionsPanel } from "./ui/decisions";
 import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
+import { TransitView } from "./render/transit";
+import type { Transit } from "./shared/city";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
 import { PROFILES, PROFILE_COLOR, PROFILE_LABEL } from "./sim/population";
@@ -53,6 +55,16 @@ async function main() {
   const events = new EventsView(city, world);
   world.scene.add(agents.group, events.group);
   const traffic = new TrafficLayer(city);
+  // bus Sibra et parkings
+  const transitData: Transit = await fetch("/transit.json").then((r) => (r.ok ? r.json() : { lines: [], parkings: [] }));
+  const transit = new TransitView(transitData);
+  world.scene.add(transit.group);
+  agents.setBusColors(transitData.lines.map((l) => l.colour));
+  const busBtn = $<HTMLButtonElement>("#bus-lines");
+  busBtn.onclick = () => {
+    busBtn.classList.toggle("active");
+    transit.showLines = busBtn.classList.contains("active");
+  };
   const preview = new PreviewLayer(city);
   world.scene.add(traffic.mesh, preview.group);
   const trafficBtn = $<HTMLButtonElement>("#traffic");
@@ -200,7 +212,10 @@ async function main() {
     } else if (msg.type === "preview") {
       preview.set(msg.preview);
       if (msg.preview) lookAt(msg.preview.x, msg.preview.z);
-    } else if (msg.type === "traffic") traffic.update(msg.data);
+    } else if (msg.type === "traffic") {
+      traffic.update(msg.data);
+      transit.setParking(msg.parking);
+    } else if (msg.type === "transit") transit.setLines(msg.lines);
     else if (msg.type === "cohortRequest") {
       decisions.request(msg.sid, msg.event, msg.cohorts, clock.day);
       followedEvent = -1;
@@ -210,6 +225,7 @@ async function main() {
       decisions.impact(msg.impact);
       events.setPresence(msg.impact.sid, msg.impact.active ? msg.impact.participants : 0);
     } else if (msg.type === "bilanRequest") decisions.bilan(msg.sid, msg.event, msg.bilan);
+    else if (msg.type === "cityEvent") decisions.track(msg.sid, msg.event, msg.day);
     else if (msg.type === "analysisRequest") decisions.analyse(msg.sid, msg.before, msg.after);
   };
 
@@ -377,7 +393,7 @@ function renderReport(r: DayReport) {
 
 /** Contenu d'un bilan quotidien (panneau et historique). */
 function dayReportHtml(r: DayReport) {
-  const trips = r.trips.walk + r.trips.bike + r.trips.car;
+  const trips = r.trips.walk + r.trips.bike + r.trips.car + (r.trips.bus ?? 0);
   const share = (n: number) => `${Math.round((100 * n) / Math.max(1, trips))} %`;
   const revenue = Object.entries(r.revenue).sort((a, b) => b[1] - a[1]);
   return `
@@ -388,7 +404,8 @@ function dayReportHtml(r: DayReport) {
       <div class="kpi"><small>CO₂ voitures</small><b>${r.co2Tonnes} t</b></div>
     </div>
     <div class="panel-title">Trajets (${fmt(trips)})</div>
-    <ul><li>À pied ${share(r.trips.walk)}</li><li>À vélo ${share(r.trips.bike)}</li><li>En voiture ${share(r.trips.car)} · ${fmt(r.carKm)} km</li></ul>
+    <ul><li>À pied ${share(r.trips.walk)}</li><li>À vélo ${share(r.trips.bike)}</li><li>En voiture ${share(r.trips.car)} · ${fmt(r.carKm)} km</li><li>En bus ${share(r.trips.bus ?? 0)}</li></ul>
+    ${r.parking ? `<div class="panel-title">Stationnement</div><ul><li>Parkings du centre remplis à ${pct(r.parking.peak)} au plus fort${r.parking.full ? ` (${r.parking.full} complets)` : ""}</li>${r.parking.refused ? `<li>${fmt(r.parking.refused)} automobilistes sans place, contraints de tourner</li>` : ""}</ul>` : ""}
     ${r.events.length ? `<div class="panel-title">Événements</div><ul>${r.events.map((e) => `<li>${e.icon ?? EVENT_ICON[e.kind]} ${e.title}${e.visits ? ` (${fmt(e.visits)} visiteurs)` : ""}</li>`).join("")}</ul>` : ""}
     ${r.jams.length ? `<div class="panel-title">Bouchons</div><ul>${r.jams.map((j) => `<li>${j.name} (−${Math.round(j.slowdown * 100)} % de vitesse)</li>`).join("")}</ul>` : ""}
     <div class="panel-title">Commerces</div>

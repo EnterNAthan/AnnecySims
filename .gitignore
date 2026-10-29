@@ -3,3 +3,4 @@ dist
 data/osm-raw.json
 .env
 data/asset-cache/
+data/transit-raw.json

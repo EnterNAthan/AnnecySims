@@ -20,7 +20,8 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
   if (msg.type === "init") {
     const city: City = await fetch("/city.json").then((r) => r.json());
-    engine = new Engine(city, { ...msg, startDate: new Date(msg.startDate) });
+    const transit = await fetch("/transit.json").then((r) => (r.ok ? r.json() : undefined)).catch(() => undefined);
+    engine = new Engine(city, { ...msg, startDate: new Date(msg.startDate), transit });
     const places: Record<string, number> = {};
     for (const [k, list] of engine.places.byKind) places[k] = list.length;
     post({ type: "ready", agents: engine.agents.length, places });
@@ -68,7 +69,20 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
       if (slot !== lastTraffic) {
         lastTraffic = slot;
         const data = engine.traffic();
-        post({ type: "traffic", data }, [data.buffer]);
+        const parking = engine.parkings?.snapshot() ?? new Uint16Array(0);
+        post({ type: "traffic", data, parking }, [data.buffer, parking.buffer]);
+      }
+      // tracés des bus (au démarrage, puis à chaque déviation ou navette)
+      if (engine.transitChanged && engine.bus) {
+        engine.transitChanged = false;
+        const g = engine.graph;
+        post({
+          type: "transit",
+          lines: engine.bus.dirs.map((d) => ({
+            ref: d.ref, colour: d.colour, line: d.line, name: d.name, stops: d.stops.map(({ name, x, z }) => ({ name, x, z })),
+            path: d.path ? Array.from(d.path.nodes, (n) => [Math.round(g.x[n]), Math.round(g.z[n])]).flat() : [],
+          })),
+        });
       }
     }
   }

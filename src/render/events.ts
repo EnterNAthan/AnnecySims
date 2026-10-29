@@ -19,7 +19,7 @@ const KIND_COLOR: Record<EventKind, string> = {
   blizzard: "#dff3ff", feu_artifice: "#ff4dc4", pique_nique: "#ff5a5a",
   fermeture: "#ff4d4d", pietonnisation: "#5fd08a", marathon: "#ffd84d", greve: "#c0c8d4",
   festival_musique: "#ff3d9a", fete_musique: "#b06bff", fete_foraine: "#ffb020", marche_noel: "#e8343f",
-  cinema_plein_air: "#5ab0ff", salon: "#3fc1a5", carnaval: "#ff7a2e", competition: "#ffd84d", evenement: "#6cc3ff",
+  cinema_plein_air: "#5ab0ff", salon: "#3fc1a5", carnaval: "#ff7a2e", competition: "#ffd84d", evenement: "#6cc3ff", greve_bus: "#c0c8d4",
 };
 
 const NATURE_COLOR: Record<string, string> = {
@@ -148,7 +148,7 @@ export class EventsView {
 
     // objets de la banque de modèles 3D choisis pour rendre l'événement lisible
     // (les événements courants de la ville, sans choix de Claude, ont un équipement par défaut)
-    const bank = t?.assets.length ? t.assets : t ? [] : defaultAssets(ev.kind);
+    const bank = t?.assets.length ? t.assets : defaultAssets(ev.kind);
     if (bank.length) {
       const isWater = (x: number, z: number) => this.water.isWater(x, z);
       const assets = buildAssets(bank, ev.x, ev.z, Math.max(40, Math.min(ev.radius, 200)), ev.id + 1, isWater);

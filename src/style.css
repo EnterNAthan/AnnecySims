@@ -1229,3 +1229,44 @@ svg.spark .line {
   display: block;
   color: var(--muted);
 }
+
+/* ---------- Parkings ---------- */
+
+.parking-label {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 6px 1px 1px;
+  border-radius: 7px;
+  background: rgba(16, 22, 32, 0.8);
+  color: var(--text);
+  font-size: 10px;
+  white-space: nowrap;
+  pointer-events: auto;
+}
+
+.parking-label b {
+  display: inline-grid;
+  place-items: center;
+  width: 15px;
+  height: 15px;
+  border-radius: 4px;
+  background: var(--c, #2a6fd6);
+  color: #fff;
+  font-size: 10px;
+}
+
+.hide-labels .parking-label {
+  display: none;
+}
+
+button.ask {
+  margin-top: 8px;
+  padding: 6px 12px;
+  border: 1px solid rgba(108, 195, 255, 0.4);
+  border-radius: 8px;
+  background: rgba(108, 195, 255, 0.12);
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}

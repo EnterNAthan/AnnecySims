@@ -70,6 +70,10 @@ export interface Kpis {
   carShare: number;
   bikeShare: number;
   walkShare: number;
+  /** part des trajets en bus */
+  busShare: number;
+  /** occupation moyenne des parkings proches de la zone (0..1), -1 sans parking */
+  parking: number;
   /** chiffre d'affaires par heure dans la zone de l'événement, en € */
   zoneRevenue: number;
   /** personnes présentes dans la zone */

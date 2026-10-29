@@ -34,6 +34,8 @@ export interface Decision {
   report: FinalReport | null;
   reporting: boolean;
   cancelled?: boolean;
+  /** événement courant de la ville (pas une décision) : pas d'avis des groupes, analyse sur demande */
+  auto?: boolean;
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -84,6 +86,27 @@ export class DecisionsPanel {
     return d ? this.card(d, true) : "";
   }
 
+  /** Événement courant de la ville : suivi dans l'historique, pas dans le panneau. */
+  track(sid: number, event: EventSummary, day: number) {
+    this.decisions.set(sid, { sid, day, event, cohorts: [], responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false, bilan: null, report: null, reporting: false, auto: true });
+    this.onChange();
+  }
+
+  /** Analyse de Claude à la demande (événements de la ville). */
+  async requestReport(sid: number) {
+    const d = this.decisions.get(sid);
+    if (!d?.bilan) return;
+    d.reporting = true;
+    this.render();
+    try {
+      d.report = await post<FinalReport>("/api/bilan", { event: d.event, bilan: d.bilan });
+    } catch {
+      /* facultatif */
+    }
+    d.reporting = false;
+    this.render();
+  }
+
   request(sid: number, event: EventSummary, cohorts: CohortStat[], day = 0) {
     const d: Decision = { sid, day, event, cohorts, responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false, bilan: null, report: null, reporting: false };
     this.decisions.set(sid, d);
@@ -112,6 +135,11 @@ export class DecisionsPanel {
     const d = this.decisions.get(sid);
     if (!d) return;
     d.bilan = bilan;
+    // événement courant : pas d'appel automatique à Claude (il y en a plusieurs par jour)
+    if (d.auto) {
+      this.render();
+      return;
+    }
     d.reporting = true;
     this.render();
     try {
@@ -142,7 +170,7 @@ export class DecisionsPanel {
   private render() {
     this.onChange();
     // le panneau ne montre que les décisions récentes ; les autres sont dans l'historique
-    const list = [...this.decisions.values()].filter((d) => !d.cancelled).reverse().slice(0, 4);
+    const list = [...this.decisions.values()].filter((d) => !d.cancelled && !d.auto).reverse().slice(0, 4);
     this.el.classList.toggle("hidden", !list.length);
     this.el.innerHTML = `<div class="panel-title">🏛️ Décisions</div>` + list.map((d) => this.card(d)).join("");
   }
@@ -216,6 +244,7 @@ export class DecisionsPanel {
         ${r.positives.length ? `<div class="small">👍 ${r.positives.join(" · ")}</div>` : ""}
         ${r.negatives.length ? `<div class="small">👎 ${r.negatives.join(" · ")}</div>` : ""}
         <div class="reco">💡 Prochaine édition : ${r.recommendation}</div>` : ""}
+      ${d.auto && !r && !d.reporting ? `<button class="ask" data-ask="${d.sid}">✨ Demander l'analyse à Claude</button>` : ""}
     </div>`;
   }
 
@@ -234,6 +263,8 @@ export class DecisionsPanel {
         ${row("Retard voiture", pct(b.congestion), pct(n.congestion), n.congestion - b.congestion, -1, "pts")}
         ${row("Part voiture", pct(b.carShare), pct(n.carShare), n.carShare - b.carShare, 0, "pts")}
         ${row("Part vélo", pct(b.bikeShare), pct(n.bikeShare), n.bikeShare - b.bikeShare, 0, "pts")}
+        ${row("Part bus", pct(b.busShare ?? 0), pct(n.busShare ?? 0), (n.busShare ?? 0) - (b.busShare ?? 0), 0, "pts")}
+        ${n.parking >= 0 ? row("Parkings proches", pct(Math.max(0, b.parking)), pct(n.parking), n.parking - Math.max(0, b.parking), -1, "pts") : ""}
         ${row("Présents (zone)", fmt(b.zonePeople), fmt(n.zonePeople), rel(b.zonePeople, n.zonePeople), 0)}
         ${row("CA zone / h", `${fmt(b.zoneRevenue)} €`, `${fmt(n.zoneRevenue)} €`, rel(b.zoneRevenue, n.zoneRevenue), 1)}
       </table>

@@ -102,6 +102,18 @@ function cyclistFarGeometry() {
   ])!;
 }
 
+const NAVETTE = new THREE.Color("#ffd84d");
+
+/** Bus articulé Sibra : caisse teintée à la couleur de la ligne, vitres, toit clair. */
+function busGeometry() {
+  return mergeGeometries([
+    part(new THREE.BoxGeometry(2.5, 2.4, 12).translate(0, 1.55, 0), "#ffffff", { tint: 1 }),
+    part(new THREE.BoxGeometry(2.56, 0.9, 11.2).translate(0, 2.05, 0.2), "#1f2a36"),
+    part(new THREE.BoxGeometry(2.3, 0.3, 11.4).translate(0, 2.9, 0), "#e8edf2"),
+    part(new THREE.BoxGeometry(2.3, 0.5, 0.05).translate(0, 2.4, 6.02), "#fff4c8", { light: 1 }),
+  ])!;
+}
+
 function carFarGeometry() {
   return mergeGeometries([
     part(new THREE.BoxGeometry(1.8, 0.9, 4.2).translate(0, 0.55, 0), "#ffffff", { tint: 1 }),
@@ -172,6 +184,9 @@ export class AgentsView {
   private readonly walkers: [THREE.InstancedMesh, THREE.InstancedMesh];
   private readonly cyclists: [THREE.InstancedMesh, THREE.InstancedMesh];
   private readonly cars: [THREE.InstancedMesh, THREE.InstancedMesh];
+  private readonly buses: THREE.InstancedMesh;
+  /** couleur de chaque ligne de bus (index = ligne ; 99 = navette) */
+  private busColors: THREE.Color[] = [];
   private readonly frustum = new THREE.Frustum();
   private readonly viewProj = new THREE.Matrix4();
   private readonly sphere = new THREE.Sphere();
@@ -203,7 +218,12 @@ export class AgentsView {
     this.walkers = [make(personGeometry(), true), make(personFarGeometry(), false)];
     this.cyclists = [make(cyclistGeometry(), true), make(cyclistFarGeometry(), false)];
     this.cars = [make(carGeometry(), true), make(carFarGeometry(), false)];
+    this.buses = make(busGeometry(), true);
     this.group.name = "agents";
+  }
+
+  setBusColors(colours: string[]) {
+    this.busColors = colours.map((c) => new THREE.Color(c));
   }
 
   /**
@@ -225,13 +245,27 @@ export class AgentsView {
     this.viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
     this.frustum.setFromProjectionMatrix(this.viewProj);
     const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
-    const n = [0, 0, 0, 0, 0, 0]; // walkers proche/loin, vélos proche/loin, voitures proche/loin
+    const n = [0, 0, 0, 0, 0, 0, 0]; // walkers proche/loin, vélos proche/loin, voitures proche/loin, bus
     const anim = (mesh: THREE.InstancedMesh) => mesh.geometry.attributes.aAnim as THREE.InstancedBufferAttribute;
     const aw = anim(this.walkers[0]), ab = anim(this.cyclists[0]);
     for (let i = 0; i < count; i++) {
       const o = i * FRAME_STRIDE;
       let x = frame[o], z = frame[o + 1], heading = frame[o + 2];
       const mode = frame[o + 3], profile = frame[o + 4], id = frame[o + 5];
+      if (mode === 7) {
+        // bus : « profil » = ligne
+        const s = Math.min(zoom * 0.55, 8);
+        this.sphere.center.set(x, s, z);
+        this.sphere.radius = 7 * s;
+        if (!this.frustum.intersectsSphere(this.sphere)) continue;
+        this.q.setFromAxisAngle(this.up, heading);
+        this.p.set(x, 0.4, z);
+        this.m.compose(this.p, this.q, this.s.setScalar(s));
+        const k = n[6]++;
+        this.buses.setMatrixAt(k, this.m);
+        this.buses.setColorAt(k, profile === 99 ? NAVETTE : this.busColors[profile] ?? NAVETTE);
+        continue;
+      }
       if (mode === 0) {
         // à l'arrêt : (x, z) est le centre du groupe, le cap l'angle de la personne autour ;
         // on l'écarte selon le zoom et on la tourne vers le centre (ils discutent)
@@ -279,13 +313,13 @@ export class AgentsView {
       attr.addUpdateRange(0, k * attr.itemSize);
       attr.needsUpdate = true;
     };
-    [...this.walkers, ...this.cyclists, ...this.cars].forEach((mesh, j) => {
+    [...this.walkers, ...this.cyclists, ...this.cars, this.buses].forEach((mesh, j) => {
       const k = n[j];
       mesh.count = k;
       if (!k) return;
       upload(mesh.instanceMatrix, k);
       if (mesh.instanceColor) upload(mesh.instanceColor, k);
-      if (j % 2 === 0) upload(anim(mesh), k);
+      if (j % 2 === 0 && j < 6) upload(anim(mesh), k);
     });
   }
 

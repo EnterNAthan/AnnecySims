@@ -19,7 +19,9 @@ export interface DayReport {
   date: string;
   dow: number;
   population: number;
-  trips: { walk: number; bike: number; car: number };
+  trips: { walk: number; bike: number; car: number; bus: number };
+  /** stationnement : occupation maximale (0..1), automobilistes sans place, parkings pleins au pic */
+  parking: { peak: number; refused: number; full: number } | null;
   carKm: number;
   co2Tonnes: number;
   /** retard moyen en voiture / temps à vide (0 = fluide) */
@@ -158,7 +160,9 @@ export type EngineMessage =
   | { type: "cohortRequest"; sid: number; event: EventSummary; cohorts: CohortStat[] }
   | { type: "analysisRequest"; sid: number; event: EventSummary; before: Kpis; after: Kpis; reference: string }
   | { type: "impact"; impact: Impact }
-  | { type: "bilanRequest"; sid: number; event: EventSummary; bilan: EventBilan };
+  | { type: "bilanRequest"; sid: number; event: EventSummary; bilan: EventBilan }
+  /** événement courant de la ville, suivi comme une décision (impact, bilan) */
+  | { type: "cityEvent"; sid: number; event: EventSummary; day: number };
 
 export type ToWorker =
   | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string }
@@ -180,7 +184,9 @@ export type FromWorker =
   | { type: "agent"; info: AgentInfo | null }
   | { type: "preview"; preview: Preview | null }
   /** état du trafic par rue : 0 vide, 1 fermée, 2..255 fluidité (255 = fluide) */
-  | { type: "traffic"; data: Uint8Array }
+  | { type: "traffic"; data: Uint8Array; /** occupation de chaque parking, ‰ */ parking: Uint16Array }
+  /** tracés des lignes de bus et navettes (x, z à plat) */
+  | { type: "transit"; lines: { ref: string; colour: string; line: number; name: string; stops: { name: string; x: number; z: number }[]; path: number[] }[] }
   | EngineMessage;
 
 export const FRAME_STRIDE = 6;

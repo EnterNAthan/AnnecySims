@@ -11,6 +11,8 @@ export class DayLog {
   /** personnes hors de chez elles par cellule de 40 m, relevé à chaque heure */
   readonly people: (Map<number, number> | null)[] = Array(24).fill(null);
   readonly satisfaction = new Float32Array(24);
+  /** occupation de chaque parking (‰), relevée à chaque heure */
+  readonly parking: (Uint16Array | null)[] = Array(24).fill(null);
 
   arrival(minute: number, id: number, mode: number, actual: number, free: number) {
     this.trips.push(minute, id, mode, actual, free);
@@ -24,8 +26,8 @@ export class DayLog {
    * Indicateurs sur [from, to[. Les trajets ne comptent que ceux des habitants concernés (`who`),
    * la fréquentation de la zone vient du dernier relevé horaire.
    */
-  kpis(from: number, to: number, zone: Zone | null, who: Uint8Array | null, scale: number): Kpis {
-    const modes = [0, 0, 0];
+  kpis(from: number, to: number, zone: Zone | null, who: Uint8Array | null, scale: number, parks: number[] = []): Kpis {
+    const modes = [0, 0, 0, 0];
     let n = 0, trip = 0, delay = 0, free = 0;
     for (let i = 0; i < this.trips.length; i += 5) {
       const m = this.trips[i];
@@ -57,10 +59,19 @@ export class DayLog {
       walkShare: +(modes[0] / total).toFixed(3),
       bikeShare: +(modes[1] / total).toFixed(3),
       carShare: +(modes[2] / total).toFixed(3),
+      busShare: +(modes[3] / total).toFixed(3),
+      parking: this.parkingAt(to, parks),
       zoneRevenue: Math.round(revenue),
       zonePeople: people * scale,
       satisfaction: +this.satisfaction[h].toFixed(3),
     };
+  }
+
+  /** Occupation moyenne des parkings `parks` au dernier relevé (0..1), -1 s'il n'y en a pas. */
+  private parkingAt(to: number, parks: number[]) {
+    const h = this.lastHour(to), occ = h >= 0 ? this.parking[h] : null;
+    if (!occ || !parks.length) return -1;
+    return +(parks.reduce((s, i) => s + occ[i], 0) / parks.length / 1000).toFixed(3);
   }
 
   /** Dernière heure relevée avant la minute `to`. */

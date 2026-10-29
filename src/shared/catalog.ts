@@ -3,7 +3,7 @@
 
 export const EVENT_KINDS = [
   // gestion urbaine (par défaut)
-  "fermeture", "travaux", "pietonnisation", "manifestation", "marathon", "greve", "marche", "brocante", "concert",
+  "fermeture", "travaux", "pietonnisation", "manifestation", "marathon", "greve", "greve_bus", "marche", "brocante", "concert",
   "festival", "pique_nique", "feu_artifice", "accident", "canicule", "blizzard", "tempete", "panne", "inondation",
   // grands rassemblements festifs
   "festival_musique", "fete_musique", "fete_foraine", "marche_noel", "cinema_plein_air", "salon", "carnaval", "competition",
@@ -143,6 +143,11 @@ export const EVENT_SPECS: Record<EventKind, EventSpec> = {
     icon: "🚆", label: "Grève du Léman Express", about: "Plus de trains vers Genève : les frontaliers sans voiture télétravaillent ou covoiturent.",
     extreme: false, danger: false, attraction: 0, radius: 150, duration: 1440, defaultStart: "", closesRoads: false, needs: "place",
     keywords: ["greve", "sncf", "leman", "train", "cheminot"],
+  },
+  greve_bus: {
+    icon: "🚌", label: "Grève des bus Sibra", about: "Plus aucun bus en ville : les usagers marchent, prennent le vélo ou la voiture.",
+    extreme: false, danger: false, attraction: 0, radius: 3000, duration: 1440, defaultStart: "", closesRoads: false, needs: "place",
+    keywords: ["greve des bus", "sibra", "bus en greve", "plus de bus"],
   },
   marche: {
     icon: "🧺", label: "Marché", about: "Marché de producteurs avec étals.",
@@ -357,7 +362,7 @@ export interface EventTraits {
 }
 
 const NATURE_OF: Partial<Record<EventKind, Nature>> = {
-  fermeture: "perturbation", travaux: "perturbation", accident: "perturbation", greve: "perturbation", panne: "perturbation",
+  fermeture: "perturbation", travaux: "perturbation", accident: "perturbation", greve: "perturbation", greve_bus: "perturbation", panne: "perturbation",
   canicule: "perturbation", blizzard: "perturbation", tempete: "perturbation", pietonnisation: "civique", manifestation: "civique",
   marathon: "sportif", competition: "sportif", concert: "culturel", cinema_plein_air: "culturel", festival: "festif",
   festival_musique: "festif", fete_musique: "festif", fete_foraine: "festif", feu_artifice: "festif", pique_nique: "festif",

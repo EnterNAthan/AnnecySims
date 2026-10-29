@@ -61,7 +61,21 @@ export interface Trip {
   /** durée à vide estimée, en minutes */
   freeMinutes: number;
   style?: "run" | "dog";
+  /** étapes suivantes d'un trajet composé (voiture puis marche depuis le parking, marche puis bus…) */
+  legs?: Leg[];
+  /** en bus : la course empruntée ; l'habitant attend à l'arrêt jusqu'à `board` */
+  ride?: { dir: number; t0: number; board: number; alight: number; stop: number };
+  /** trajet en transports en commun (pour les statistiques) */
+  transit?: boolean;
+  /** minute depuis laquelle la voiture attend que le tronçon suivant se libère (file d'attente) */
+  blocked?: number;
 }
+
+/** Étape d'un trajet composé : un déplacement entre deux nœuds, ou une course de bus. */
+export type Leg =
+  | { kind: "move"; mode: Mode; from: number; to: number; /** parking à libérer au départ */ release?: number }
+  | { kind: "bus"; dir: number; t0: number; board: number; alight: number; from: number; to: number }
+  | { kind: "wait"; minutes: number };
 
 export interface Needs {
   energy: number;
@@ -128,6 +142,8 @@ export interface Agent {
   bias: { car: number; bike: number; walk: number } | null;
   /** jour où il covoiture (grève des trains), pour forcer la voiture */
   carpoolDay: number;
+  /** parking où sa voiture est garée (index), -1 sinon */
+  parked: number;
   /** dernières pensées exprimées (la plus récente en dernier) */
   thoughtLog: { icon: string; text: string; day: number; minute: number }[];
 }
@@ -398,7 +414,7 @@ export function createPopulation(
         travelMinutes: 0, delayMinutes: 0, spentToday: 0,
         hasDog: false, lastThought: -999, thoughtLog: [],
         // le mode habituel est relevé à chaque départ du domicile
-        district: "", usualMode: 1, bias: null, carpoolDay: -1,
+        district: "", usualMode: 1, bias: null, carpoolDay: -1, parked: -1,
       };
       agents.push(a);
       hh.members.push(a);
