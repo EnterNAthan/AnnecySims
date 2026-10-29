@@ -91,6 +91,14 @@ export interface Agent {
   hasDog: boolean;
   /** minute de la dernière pensée exprimée, pour ne pas spammer */
   lastThought: number;
+  /** quartier de résidence (groupes d'habitants) */
+  district: string;
+  /** mode de la dernière tournée : 1 marche, 2 vélo, 3 voiture */
+  usualMode: number;
+  /** préférences décidées pour son groupe face à un événement en cours */
+  bias: { car: number; bike: number; walk: number } | null;
+  /** jour où il covoiture (grève des trains), pour forcer la voiture */
+  carpoolDay: number;
   /** dernières pensées exprimées (la plus récente en dernier) */
   thoughtLog: { icon: string; text: string; day: number; minute: number }[];
 }
@@ -153,6 +161,7 @@ export function createPopulation(places: Places, residents: number, tourists: nu
       hasDog: profile !== "touriste" && profile !== "pendulaire" && profile !== "enfant" && rand() < (profile === "retraite" ? 0.3 : 0.12),
       lastThought: -999,
       thoughtLog: [],
+      district: "", usualMode: hasCar ? 3 : 1, bias: null, carpoolDay: -1,
     };
     agents.push(a);
     return a;

@@ -16,6 +16,7 @@ export const LOCATIONS: NamedLocation[] = [
   { name: "Château d'Annecy", lat: 45.89758, lon: 6.12593, labelHeight: 40, aliases: ["chateau"] },
   { name: "Cathédrale Saint-Pierre", lat: 45.89933, lon: 6.12549, labelHeight: 35, aliases: ["cathedrale", "eglise"] },
   { name: "Vieille ville", lat: 45.8988, lon: 6.1262, labelHeight: 0, aliases: ["vieille ville", "vieil annecy", "rue sainte-claire", "centre historique"] },
+  { name: "Préfecture", lat: 45.9019, lon: 6.1318, labelHeight: 0, aliases: ["prefecture", "rue du 30e regiment"] },
   { name: "Hôtel de Ville", lat: 45.89935, lon: 6.1288, labelHeight: 25, aliases: ["mairie", "hotel de ville"] },
   { name: "Le Pâquier", lat: 45.90158, lon: 6.13194, labelHeight: 10, aliases: ["paquier", "pelouse"] },
   { name: "Jardins de l'Europe", lat: 45.89935, lon: 6.13082, labelHeight: 15, aliases: ["jardins de l'europe", "jardin"] },

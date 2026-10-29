@@ -2,7 +2,8 @@
 import * as THREE from "three";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { City } from "../shared/city";
-import { EVENT_ICON, type CityEvent, type DayPlan, type EventKind } from "../sim/events";
+import { cortege, EVENT_ICON, type CityEvent, type DayPlan, type EventKind } from "../sim/events";
+import { ribbon } from "./cityMeshes";
 import { earthquake, fire, fireworks, flood, meteorite, picnic, tsunami, ufo, type Animate, type FxHost } from "./disasters";
 
 const KIND_COLOR: Record<EventKind, string> = {
@@ -10,6 +11,7 @@ const KIND_COLOR: Record<EventKind, string> = {
   manifestation: "#4fc3ff", brocante: "#9ccc65", meteorite: "#ff6a1a", inondation: "#3d9bff", tsunami: "#1f7dff",
   tempete: "#8a93a6", incendie: "#ff4a12", seisme: "#c79b5b", panne: "#ffe14d", ovni: "#7dff8a", canicule: "#ff9a3c",
   blizzard: "#dff3ff", feu_artifice: "#ff4dc4", pique_nique: "#ff5a5a",
+  fermeture: "#ff4d4d", pietonnisation: "#5fd08a", marathon: "#ffd84d", greve: "#c0c8d4",
 };
 
 export const hhmm = (m: number) => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;
@@ -29,8 +31,8 @@ interface EventVisual {
   ring: THREE.Mesh;
   /** décor visible seulement pendant l'événement */
   props: THREE.Group;
-  /** éléments animés (projecteurs, gyrophares) */
-  animate?: (t: number, night: number) => void;
+  /** éléments animés (projecteurs, gyrophares, cortège) */
+  animate?: (t: number, night: number, minute: number) => void;
   /** effet spectaculaire, animé en temps réel depuis son déclenchement */
   fx?: Animate;
   /** instant réel (s) où l'événement est devenu actif à l'écran */
@@ -54,6 +56,7 @@ export class EventsView {
       const old = keep.get(key);
       if (old) {
         keep.delete(key);
+        old.ev = ev; // horaires à jour (événement annulé ou prolongé)
         next.push(old);
       } else next.push(this.build(ev));
     }
@@ -74,7 +77,8 @@ export class EventsView {
     const el = document.createElement("div");
     el.className = ev.byPlayer ? "event-label player" : "event-label";
     el.style.setProperty("--c", color);
-    el.innerHTML = `<span class="icon">${EVENT_ICON[ev.kind]}</span><span><b>${ev.title}</b><small>${hhmm(ev.start)} – ${hhmm(ev.end)}</small></span>`;
+    const when = ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`;
+    el.innerHTML = `<span class="icon">${EVENT_ICON[ev.kind]}</span><span><b>${ev.title}</b><small>${when}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small></span>`;
     const label = new CSS2DObject(el);
     // au-dessus des effets en hauteur (soucoupe, gerbes)
     label.position.set(ev.x, ev.kind === "ovni" ? 230 : ev.kind === "feu_artifice" ? 320 : 45, ev.z);
@@ -89,7 +93,8 @@ export class EventsView {
     const visual: EventVisual = { ev, label, ring, props };
     if (ev.kind === "marche" || ev.kind === "brocante") this.stalls(ev, props);
     if (ev.kind === "concert" || ev.kind === "festival") visual.animate = this.stage(ev, props, color);
-    if (ev.closedRoads.length) this.closure(ev, props, color);
+    if (ev.closedRoads.length) this.closure(ev, props, color, ev.kind !== "pietonnisation");
+    if (ev.path) visual.animate = this.route(ev, props, color);
     if (ev.kind === "accident") visual.animate = this.beacon(ev, props);
     if (ev.kind === "meteorite") visual.fx = meteorite(ev, props, this.host);
     if (ev.kind === "incendie") visual.fx = fire(ev.x, ev.z, 25 + ev.intensity * 15, props);
@@ -155,7 +160,7 @@ export class EventsView {
   }
 
   /** Rue fermée : surlignée, avec des cônes de chantier. */
-  private closure(ev: CityEvent, props: THREE.Group, color: string) {
+  private closure(ev: CityEvent, props: THREE.Group, color: string, withCones = true) {
     const pts: THREE.Vector3[] = [];
     const cones: THREE.Vector3[] = [];
     for (const r of ev.closedRoads) {
@@ -185,8 +190,62 @@ export class EventsView {
     const coneMesh = new THREE.InstancedMesh(new THREE.ConeGeometry(0.6, 1.6, 6), new THREE.MeshLambertMaterial({ color: "#ff7a00", emissive: "#ff5a00", emissiveIntensity: 0.4 }), Math.max(1, cones.length));
     const m = new THREE.Matrix4();
     cones.forEach((p, i) => coneMesh.setMatrixAt(i, m.makeScale(2.5, 2.5, 2.5).setPosition(p.x, 2, p.z)));
-    coneMesh.count = cones.length;
+    coneMesh.count = withCones ? cones.length : 0;
     props.add(line, ribbon, coneMesh);
+  }
+
+  /**
+   * Parcours d'un cortège ou d'une course : tracé au sol, départ et arrivée, et pour une manifestation
+   * une banderole qui suit la tête du cortège.
+   */
+  private route(ev: CityEvent, props: THREE.Group, color: string) {
+    const path = ev.path!;
+    const pts: [number, number][] = [];
+    for (let i = 0; i < path.length; i += 2) pts.push([path[i], path[i + 1]]);
+    const line = new THREE.Mesh(ribbon([{ pts, w: 6 }], 1.1), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.7, depthWrite: false }));
+    props.add(line);
+    const flag = (x: number, z: number, text: string) => {
+      const el = document.createElement("div");
+      el.className = "route-flag";
+      el.style.setProperty("--c", color);
+      el.textContent = text;
+      const o = new CSS2DObject(el);
+      o.position.set(x, 14, z);
+      props.add(o);
+      return o;
+    };
+    const [x0, z0] = pts[0], [x1, z1] = pts[pts.length - 1];
+    const loop = Math.hypot(x1 - x0, z1 - z0) < 60;
+    flag(x0, z0, loop ? "🏁 Départ / arrivée" : "🚩 Départ");
+    if (!loop) flag(x1, z1, "🏁 Arrivée");
+    if (ev.kind !== "manifestation") return undefined;
+    const cum = [0];
+    for (let i = 1; i < pts.length; i++) cum.push(cum[i - 1] + Math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]));
+    const at = (d: number): [number, number] => {
+      let i = 1;
+      while (i < cum.length - 1 && cum[i] < d) i++;
+      const k = Math.max(0, Math.min(1, (d - cum[i - 1]) / (cum[i] - cum[i - 1] || 1)));
+      return [pts[i - 1][0] + (pts[i][0] - pts[i - 1][0]) * k, pts[i - 1][1] + (pts[i][1] - pts[i - 1][1]) * k];
+    };
+    const banner = flag(x0, z0, "📣 Tête du cortège");
+    banner.element.classList.add("banner");
+    // segment du parcours occupé par le cortège
+    const body = new THREE.Mesh(new THREE.BufferGeometry(), new THREE.MeshBasicMaterial({ color, transparent: true, opacity: 0.5, depthWrite: false }));
+    props.add(body);
+    let lastKey = "";
+    return (_t: number, _night: number, minute = ev.start) => {
+      const [head, tail] = cortege(ev, ev.pathLength ?? cum[cum.length - 1], minute);
+      const [hx, hz] = at(head);
+      banner.position.set(hx, 16, hz);
+      const key = `${Math.round(head / 5)}:${Math.round(tail / 5)}`;
+      if (key === lastKey) return;
+      lastKey = key;
+      const seg: [number, number][] = [at(tail)];
+      for (let i = 0; i < pts.length; i++) if (cum[i] > tail && cum[i] < head) seg.push(pts[i]);
+      seg.push([hx, hz]);
+      body.geometry.dispose();
+      body.geometry = ribbon([{ pts: seg, w: 14 }], 1.3);
+    };
   }
 
   /** Gyrophare clignotant au-dessus de l'accident. */
@@ -216,8 +275,8 @@ export class EventsView {
         const base = v.ev.radius > 100 && v.ev.radius < 2000 ? v.ev.radius / 30 : 1;
         const k = base * (1 + 0.08 * Math.sin(time * 3));
         v.ring.scale.set(k, 1, k);
-        v.ring.visible = v.ev.radius < 2000;
-        v.animate?.(time, night);
+        v.ring.visible = v.ev.radius < 2000 && !v.ev.path;
+        v.animate?.(time, night, minute);
         v.shownSince ??= time;
         v.fx?.(time - v.shownSince, time, night);
       }

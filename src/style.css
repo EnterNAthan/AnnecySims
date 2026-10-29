@@ -185,7 +185,7 @@ body {
   position: fixed;
   right: 12px;
   top: 12px;
-  width: 310px;
+  width: 350px;
   max-height: calc(100vh - 320px);
   display: flex;
   flex-direction: column;
@@ -633,4 +633,253 @@ button.wide {
 #proposal.thinking {
   color: var(--muted);
   font-style: italic;
+}
+
+/* ---------- Décisions du joueur ---------- */
+
+#decisions {
+  max-height: 60vh;
+  overflow: auto;
+}
+
+.decision {
+  margin: 6px 0 10px;
+  padding: 8px 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 10px;
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.decision summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.decision summary::-webkit-details-marker {
+  display: none;
+}
+
+.d-icon {
+  font-size: 20px;
+}
+
+.d-title {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.d-title small {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.decision summary button {
+  border: none;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.decision summary button:hover {
+  color: var(--text);
+}
+
+table.impact {
+  width: 100%;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+table.impact td {
+  padding: 2px 3px;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+}
+
+table.impact td:first-child {
+  color: var(--muted);
+}
+
+table.impact td:nth-child(3) {
+  color: var(--muted);
+}
+
+table.impact td:last-child {
+  text-align: right;
+  font-weight: 600;
+}
+
+.good {
+  color: #5fd08a;
+}
+
+.bad {
+  color: #ff6b6b;
+}
+
+.flat {
+  color: var(--muted);
+}
+
+.sub {
+  margin: 10px 0 4px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.badge {
+  margin-left: 4px;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: rgba(108, 195, 255, 0.15);
+  color: var(--accent);
+  font-size: 10px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.voice {
+  display: flex;
+  gap: 8px;
+  padding: 5px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  font-size: 12px;
+}
+
+.voice .m {
+  font-size: 18px;
+}
+
+.voice small {
+  color: var(--muted);
+}
+
+.voice em {
+  color: #dfe7ef;
+}
+
+.voice .acts {
+  margin-top: 2px;
+  color: var(--accent);
+  font-size: 11px;
+}
+
+.analysis p {
+  margin: 4px 0;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.analysis .reco {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background: rgba(255, 210, 122, 0.1);
+  color: #ffd27a;
+  font-size: 12px;
+}
+
+.voice-tag {
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(108, 195, 255, 0.15);
+  color: var(--accent);
+  font-size: 10px;
+}
+
+.event-row.player {
+  border-color: rgba(108, 195, 255, 0.4);
+}
+
+.spinner {
+  display: inline-block;
+  width: 10px;
+  height: 10px;
+  margin-right: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  vertical-align: -1px;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+#proposal .details {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 12px;
+  margin-top: 6px;
+}
+
+.proposal-actions .hint {
+  align-self: center;
+  margin-left: auto;
+  color: #7fe3ff;
+  font-size: 11px;
+}
+
+.extreme-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.extreme-on #command-form {
+  border-color: rgba(255, 106, 26, 0.6);
+}
+
+#chips button.extreme {
+  border-color: rgba(255, 106, 26, 0.5);
+}
+
+.route-flag {
+  padding: 2px 8px;
+  border-radius: 8px;
+  border-left: 4px solid var(--c);
+  background: rgba(16, 22, 32, 0.85);
+  color: var(--text);
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.route-flag.banner {
+  font-weight: 600;
+  font-size: 12px;
+}
+
+table.impact td {
+  white-space: nowrap;
+}
+
+.chips-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.chips-row span {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.07);
+  font-size: 11px;
 }

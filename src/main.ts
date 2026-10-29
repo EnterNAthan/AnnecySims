@@ -8,7 +8,8 @@ import { AgentsView } from "./render/agents";
 import { EventsView, hhmm } from "./render/events";
 import { ThoughtBubbles } from "./render/thoughts";
 import { setupCommandBar } from "./ui/command";
-import { locationXZ } from "./shared/locations";
+import { DecisionsPanel } from "./ui/decisions";
+import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
 import { PROFILES, PROFILE_COLOR, PROFILE_LABEL } from "./sim/population";
@@ -43,6 +44,14 @@ async function main() {
   const agents = new AgentsView(total);
   const events = new EventsView(city, world);
   world.scene.add(agents.group, events.group);
+  const traffic = new TrafficLayer(city);
+  const preview = new PreviewLayer(city);
+  world.scene.add(traffic.mesh, preview.group);
+  const trafficBtn = $<HTMLButtonElement>("#traffic");
+  trafficBtn.onclick = () => {
+    trafficBtn.classList.toggle("active");
+    traffic.flow = trafficBtn.classList.contains("active");
+  };
 
   const clock = new SimClock(startDate, params.has("h") ? Number(params.get("h")) * 60 : 6 * 60);
   if (params.has("paused")) clock.paused = true;
@@ -98,23 +107,33 @@ async function main() {
   await ready;
   $("#loading").remove();
 
-  // Commandes en langage naturel → événements confirmés par le joueur.
+  // Commandes en langage naturel → aperçu → décision confirmée par le joueur.
   let currentPlan: DayPlan | null = null;
+  const lookAt = (x: number, z: number) => {
+    selected = -1;
+    $("#agent").classList.add("hidden");
+    follow = false;
+    world.flyTo = new THREE.Vector3(x, 0, z);
+  };
   setupCommandBar(
     {
       time: () => clock.label().split(" · ").pop()!,
       weather: () => (currentPlan ? `${currentPlan.weather.kind}, ${currentPlan.weather.tempC} °C` : "inconnue"),
+      preview: (proposal) => {
+        send({ type: "preview", proposal });
+        if (!proposal) preview.set(null);
+      },
     },
-    (proposal) => {
-      send({ type: "addEvent", proposal });
-      const onShore = (proposal.kind === "tsunami" || proposal.kind === "inondation") && proposal.location === "Lac d'Annecy";
-      const [x, z] = locationXZ(onShore ? "Le Pâquier" : proposal.location);
-      selected = -1;
-      $("#agent").classList.add("hidden");
-      follow = false;
-      world.flyTo = new THREE.Vector3(x, 0, z);
-    },
+    (proposal) => send({ type: "addEvent", proposal }),
   );
+  const decisions = new DecisionsPanel({
+    cohortPlan: (sid, responses) => send({ type: "cohortPlan", sid, responses }),
+    cancel: (sid) => send({ type: "cancelEvent", sid }),
+    goTo: (sid) => {
+      const ev = currentPlan?.events.find((e) => e.sid === sid);
+      if (ev) lookAt(ev.x, ev.z);
+    },
+  });
 
   // Échange de trames avec le worker : la trame est copiée avant que le buffer reparte.
   let buffer: ArrayBuffer | null = new ArrayBuffer(total * FRAME_STRIDE * 4);
@@ -153,7 +172,16 @@ async function main() {
     } else if (msg.type === "agent" && msg.info && msg.info.id === selected) {
       info = msg.info;
       renderAgent(info, follow);
-    }
+    } else if (msg.type === "preview") {
+      preview.set(msg.preview);
+      if (msg.preview) lookAt(msg.preview.x, msg.preview.z);
+    } else if (msg.type === "traffic") traffic.update(msg.data);
+    else if (msg.type === "cohortRequest") {
+      decisions.request(msg.sid, msg.event, msg.cohorts);
+      const ev = currentPlan?.events.find((e) => e.sid === msg.sid);
+      if (ev) lookAt(ev.x, ev.z);
+    } else if (msg.type === "impact") decisions.impact(msg.impact);
+    else if (msg.type === "analysisRequest") decisions.analyse(msg.sid, msg.before, msg.after);
   };
 
   let last = performance.now();
@@ -169,8 +197,9 @@ async function main() {
     world.setTime(clock.date, clock.hour);
     $("#time").textContent = clock.label();
     const t = now / 1000;
-    if (frameCount) agents.update(frame, frameCount, world.camera.position.distanceTo(world.controls.target), world.night, t);
+    if (frameCount) agents.update(frame, frameCount, world.camera, world.camera.position.distanceTo(world.controls.target), world.night, t);
     events.update(clock.minute, t, world.night);
+    preview.update(t);
     const active = events.activeKinds(clock.minute);
     world.blackout = active.has("panne");
     world.storm = active.has("tempete");
@@ -230,7 +259,7 @@ function renderCounts(c: LiveCounts) {
 
 function renderFeed(feed: Thought[]) {
   $("#feed").innerHTML = `<div class="panel-title">💬 Ce que disent les habitants</div>` +
-    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}<br><em>« ${th.text} »</em></div></div>`).join("");
+    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
 }
 
 function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {
@@ -239,7 +268,7 @@ function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {
   const el = $("#today");
   el.innerHTML = `<div class="panel-title">Aujourd'hui · ${WEATHER_ICON[w.kind]} ${w.kind}, ${w.tempC} °C</div>` +
     (plan.events.length
-      ? plan.events.map((ev) => `<button class="event-row" data-x="${ev.x}" data-z="${ev.z}" title="${ev.description}">${EVENT_ICON[ev.kind]} <b>${ev.title}</b><small>${hhmm(ev.start)} – ${hhmm(ev.end)}</small></button>`).join("")
+      ? plan.events.map((ev) => `<button class="event-row${ev.byPlayer ? " player" : ""}" data-x="${ev.x}" data-z="${ev.z}" title="${ev.description}">${EVENT_ICON[ev.kind]} <b>${ev.title}</b><small>${ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small></button>`).join("")
       : `<div class="muted">Journée calme, aucun événement.</div>`);
   el.querySelectorAll<HTMLButtonElement>(".event-row").forEach((b) => (b.onclick = () => goTo(Number(b.dataset.x), Number(b.dataset.z))));
 }
@@ -276,7 +305,7 @@ function renderReport(r: DayReport) {
   const share = (n: number) => `${Math.round((100 * n) / Math.max(1, trips))} %`;
   const revenue = Object.entries(r.revenue).sort((a, b) => b[1] - a[1]);
   el.innerHTML = `
-    <details ${el.querySelector("details")?.open === false ? "" : "open"}>
+    <details ${el.querySelector("details")?.open ? "open" : ""}>
     <summary class="panel-title">Bilan du jour ${r.day} · ${new Date(r.date).toLocaleDateString("fr-FR", { weekday: "long", day: "numeric", month: "long" })}</summary>
     <div class="kpis">
       <div class="kpi"><small>Satisfaction</small><b>${pct(r.satisfaction)}</b></div>

@@ -2,6 +2,7 @@
 import type { Profile } from "./population";
 import type { DayPlan, EventKind, Weather } from "./events";
 import type { EventProposal } from "../shared/catalog";
+import type { CohortResponse, CohortStat, EventSummary, Kpis } from "../shared/advisors";
 
 /** Leviers municipaux appliqués à la simulation (enrichis aux étapes suivantes). */
 export interface Policy {
@@ -80,14 +81,51 @@ export interface Thought {
   icon: string;
   text: string;
   minute: number;
+  /** porte-parole d'un groupe d'habitants (« Frontaliers · Les Fins ») */
+  voice?: string;
 }
+
+/** Ce qu'un événement change dans la ville : maintenant, comparé à la même heure sans l'événement. */
+export interface Impact {
+  sid: number;
+  title: string;
+  kind: EventKind;
+  minute: number;
+  active: boolean;
+  /** « hier à la même heure » ou « juste avant le début » */
+  reference: string;
+  before: Kpis;
+  now: Kpis;
+  /** automobilistes déviés depuis le début */
+  rerouted: number;
+  /** personnes présentes à l'événement (manifestants, coureurs, visiteurs) */
+  participants: number;
+}
+
+/** Aperçu d'un événement avant confirmation : rues et parcours concernés. */
+export interface Preview {
+  roads: number[];
+  path: number[] | null;
+  x: number;
+  z: number;
+  radius: number;
+}
+
+/** Messages produits par le moteur, relayés tels quels par le worker. */
+export type EngineMessage =
+  | { type: "cohortRequest"; sid: number; event: EventSummary; cohorts: CohortStat[] }
+  | { type: "analysisRequest"; sid: number; event: EventSummary; before: Kpis; after: Kpis; reference: string }
+  | { type: "impact"; impact: Impact };
 
 export type ToWorker =
   | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string }
   /** avance jusqu'à `minute` du jour `day` ; renvoie le buffer pour réutilisation */
   | { type: "tick"; day: number; minute: number; buffer: ArrayBuffer }
   | { type: "inspect"; id: number }
-  | { type: "addEvent"; proposal: EventProposal };
+  | { type: "addEvent"; proposal: EventProposal }
+  | { type: "preview"; proposal: EventProposal | null }
+  | { type: "cohortPlan"; sid: number; responses: CohortResponse[] }
+  | { type: "cancelEvent"; sid: number };
 
 export type FromWorker =
   | { type: "ready"; agents: number; places: Record<string, number> }
@@ -96,6 +134,10 @@ export type FromWorker =
   | { type: "dayStart"; day: number; plan: DayPlan }
   /** le plan du jour a changé (événement ajouté par le joueur) */
   | { type: "planUpdate"; plan: DayPlan; added: number }
-  | { type: "agent"; info: AgentInfo | null };
+  | { type: "agent"; info: AgentInfo | null }
+  | { type: "preview"; preview: Preview | null }
+  /** état du trafic par rue : 0 vide, 1 fermée, 2..255 fluidité (255 = fluide) */
+  | { type: "traffic"; data: Uint8Array }
+  | EngineMessage;
 
 export const FRAME_STRIDE = 6;

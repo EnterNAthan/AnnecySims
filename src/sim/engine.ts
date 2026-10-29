@@ -2,14 +2,18 @@
 import type { City } from "../shared/city";
 import { BIKE_SPEED, Graph, Mode, WALK_SPEED } from "./graph";
 import { OUTDOOR, PLACE_LABEL, Places, type Place, type PlaceKind } from "./places";
-import { generateDayPlan, type CityEvent, type DayPlan } from "./events";
+import { cortege, generateDayPlan, type CityEvent, type DayPlan } from "./events";
 import { createPopulation, PROFILES, type Agent, type Profile } from "./population";
 import { addOutings, insertOuting, planDay } from "./planner";
-import type { AgentInfo, DayReport, Policy, Thought } from "./protocol";
+import type { AgentInfo, DayReport, EngineMessage, Policy, Preview, Thought } from "./protocol";
 import { ROAD_FLAGS } from "../shared/city";
 import { WaterMask } from "./water";
 import { EVENT_SPECS, type EventProposal } from "../shared/catalog";
-import { locationXZ } from "../shared/locations";
+import { localCohortResponses, type CohortResponse, type CohortStat, type EventSummary } from "../shared/advisors";
+import { eventGeometry, pointAt, rollingClosure, type EventGeometry, type RoutePath } from "./eventGeometry";
+import { cohortId, cohortStats, districtOf, isAffected } from "./cohorts";
+import { cellKey } from "./eventGeometry";
+import { DayLog } from "./kpis";
 
 /** Un agent simulé représente ce nombre de personnes réelles (trafic, chiffre d'affaires, CO₂). */
 export const AGENT_SCALE = 4;
@@ -40,6 +44,40 @@ export interface EngineOptions {
   startDate: Date;
 }
 
+/** un cortège ou une course se prépare : les participants s'organisent 45 min avant le départ */
+const MOBILIZE = 45;
+
+/** Lieux de loisirs et de courses, que l'on peut annuler ou déplacer. */
+const LEISURE: ReadonlySet<PlaceKind> = new Set(["food", "bar", "grocery", "shop", "culture", "sport", "lake", "park"]);
+
+/** Décision du joueur, éventuellement sur plusieurs jours. */
+interface Scheduled {
+  sid: number;
+  p: EventProposal;
+  geo: EventGeometry;
+  summary: EventSummary;
+  firstDay: number;
+  lastDay: number;
+  /** début et fin le premier jour, puis les jours suivants (minutes) */
+  firstStart: number;
+  firstEnd: number;
+  start: number;
+  end: number;
+  cohorts: CohortStat[];
+  /** habitants concernés (domicile, trajet ou destination dans la zone), mesurés à la décision */
+  affected: Uint8Array;
+  /** réactions des groupes reçues de Claude (null tant qu'elles ne sont pas arrivées) */
+  responses: CohortResponse[] | null;
+  /** réactions déjà appliquées aujourd'hui, pour n'appliquer que la différence */
+  applied: { day: number; byId: Map<string, CohortResponse> } | null;
+  /** journal de la veille du premier jour : la ville sans l'événement */
+  baseline: DayLog | null;
+  analysisSent: boolean;
+  rerouted: number;
+  /** commerces de la zone (piétonnisation) */
+  zoneShops: Place[];
+}
+
 export const DEFAULT_POLICY: Policy = { parkingPrice: 2.5, bikeComfort: 1, carFriction: 1 };
 
 export class Engine {
@@ -52,11 +90,29 @@ export class Engine {
   dayPlan!: DayPlan;
   /** lieu temporaire de chaque événement du jour */
   private eventPlaces = new Map<number, Place>();
-  private closuresApplied = new Set<number>();
   /** pensées émises depuis la dernière trame */
   thoughts: Thought[] = [];
   /** événements du joueur dont la réaction des habitants n'a pas encore eu lieu */
   private pendingReactions: CityEvent[] = [];
+  /** décisions du joueur, par identifiant */
+  private scheduled = new Map<number, Scheduled>();
+  private nextSid = 1;
+  /** messages pour la page (réactions des groupes à demander, analyses, impact) */
+  outbox: EngineMessage[] = [];
+  /** cortèges et courses : lieu de l'événement → parcours */
+  private routeStays = new Map<Place, { ev: CityEvent; path: RoutePath }>();
+  private closureKey = "";
+  private closedRoads = new Set<number>();
+  /** zones piétonnes actives (bonus pour les commerces) */
+  private pedestrianZones: Scheduled[] = [];
+  private log = new DayLog();
+  private prevLog: DayLog | null = null;
+  private lastHourLogged = -1;
+  private lastImpact = 0;
+  private readonly genevaExits: Place[];
+  // trafic lissé par rue, pour la couche « trafic »
+  private readonly emaFactor: Float32Array;
+  private readonly emaLoad: Float32Array;
   private readonly rand: () => number;
   private readonly startDate: Date;
   private readonly city: City;
@@ -86,6 +142,9 @@ export class Engine {
     this.water = new WaterMask(city);
     this.places = new Places(city, this.graph);
     this.agents = createPopulation(this.places, opts.residents, opts.tourists, opts.commuters, this.rand);
+    for (const a of this.agents) a.district = districtOf(a);
+    const exits = this.places.list("exit");
+    this.genevaExits = [...exits].sort((a, b) => a.z + a.x - (b.z + b.x)).slice(0, Math.max(1, Math.ceil(exits.length / 3)));
     const g = this.graph, nr = city.roads.length;
     this.roadStorage = new Float32Array(nr);
     for (let e = 0; e < g.to.length; e++) this.roadStorage[g.edgeRoad[e]] += g.storage[e];
@@ -93,6 +152,8 @@ export class Engine {
     this.roadFactor = new Float32Array(nr).fill(1);
     this.obsSum = new Float32Array(nr);
     this.obsW = new Float32Array(nr);
+    this.emaFactor = new Float32Array(nr).fill(1);
+    this.emaLoad = new Float32Array(nr);
 
     this.startDay();
   }
@@ -107,15 +168,24 @@ export class Engine {
   startDay(plan?: DayPlan) {
     this.dayPlan = plan ?? generateDayPlan(this.city, this.date, this.rand);
     this.eventPlaces.clear();
+    this.routeStays.clear();
+    this.pendingReactions = [];
     for (const ev of this.dayPlan.events) this.eventPlaces.set(ev.id, this.places.transient("event", ev.x, ev.z, ev.title));
+    // décisions du joueur qui couvrent aujourd'hui (avant la planification : la météo peut changer)
+    for (const [sid, s] of this.scheduled) {
+      if (s.lastDay < this.day) this.scheduled.delete(sid);
+      else if (s.firstDay === this.day) this.instantiate(s, s.firstStart, s.firstEnd);
+      else if (s.firstDay < this.day) this.instantiate(s, s.start, s.end);
+    }
     const wet = this.dayPlan.weather.kind === "pluie" || this.dayPlan.weather.kind === "neige";
     const ctx = { dow: this.date.getDay(), rand: this.rand, wet };
     for (const a of this.agents) {
       a.plan = planDay(a, this.places, ctx);
       // sous la pluie, la plupart renoncent au lac et au parc
       if (wet) for (const act of a.plan) if (OUTDOOR.has(act.place.kind) && this.rand() < 0.7) act.place = a.home;
-      for (const ev of this.dayPlan.events) this.maybeAttend(a, ev);
+      for (const ev of this.dayPlan.events) if (!ev.byPlayer) this.maybeAttend(a, ev);
       addOutings(a, this.places, ctx);
+      a.bias = null;
       a.step = 0;
       a.trip = null;
       a.tourMode = null;
@@ -130,6 +200,8 @@ export class Engine {
     this.obsSum.fill(0);
     this.obsW.fill(0);
     this.minute = 0;
+    this.lastHourLogged = -1;
+    this.lastImpact = 0;
   }
 
   /** Insère une visite à l'événement si l'habitant est chez lui à ce moment-là. */
@@ -142,10 +214,10 @@ export class Engine {
   }
 
   /** L'habitant exprime une pensée (bulle au-dessus de sa tête, fil d'actualité). */
-  private think(a: Agent, icon: string, text: string, chance = 1) {
+  private think(a: Agent, icon: string, text: string, chance = 1, voice?: string) {
     if (this.minute - a.lastThought < THOUGHT_COOLDOWN || this.rand() > chance) return;
     a.lastThought = this.minute;
-    this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute) });
+    this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute), ...(voice ? { voice } : {}) });
     a.thoughtLog.push({ icon, text, day: this.day, minute: Math.round(this.minute) });
     if (a.thoughtLog.length > 8) a.thoughtLog.shift();
   }
@@ -222,40 +294,78 @@ export class Engine {
     return this.dayPlan.events.find((e) => e.kind === kind && this.minute >= e.start && this.minute < e.end);
   }
 
+  /** Aperçu d'une proposition : rues fermées, parcours, zone. */
+  preview(p: EventProposal): Preview {
+    const g = eventGeometry(this.city, this.graph, p);
+    const roads = g.path && !g.closedRoads.length ? [...new Set(g.path.roads.filter((r) => r >= 0))] : g.closedRoads;
+    return { roads, path: g.path ? flatten(g.path) : null, x: g.x, z: g.z, radius: g.radius };
+  }
+
   /**
-   * Ajoute un événement demandé par le joueur. La météo et les fermetures s'appliquent tout de suite ;
-   * les habitants réagissent au début de l'événement.
+   * Programme une décision du joueur (éventuellement sur plusieurs jours) et demande à la page
+   * la réaction des groupes d'habitants concernés. Renvoie son identifiant.
    */
-  addEvent(p: EventProposal): CityEvent {
-    const spec = EVENT_SPECS[p.kind];
-    // une vague ou une crue frappe la rive, pas le milieu du lac
-    const location = (p.kind === "tsunami" || p.kind === "inondation") && p.location === "Lac d'Annecy" ? "Le Pâquier" : p.location;
-    const [x, z] = locationXZ(location);
-    const intensity = Math.max(1, Math.min(3, p.intensity));
-    const radius = spec.radius * [0, 0.6, 1, 1.7][intensity];
-    const start = Math.min(1439, Math.round(this.minute + Math.max(0, p.startIn)));
-    const closedRoads: number[] = [];
-    if (spec.closesRoads) {
-      this.city.roads.forEach((r, i) => {
-        if (!(r.f & ROAD_FLAGS.CAR)) return;
-        const hit = r.n.some((n) => Math.hypot(this.city.nodes[2 * n] - x, this.city.nodes[2 * n + 1] - z) < Math.max(radius, 40));
-        if (hit) closedRoads.push(i);
-      });
+  addEvent(p: EventProposal): number {
+    const geo = eventGeometry(this.city, this.graph, p);
+    const parsed = parseHHMM(p.startTime);
+    const duration = Math.max(10, Math.min(1440, Math.round(p.durationMinutes)));
+    const days = Math.max(1, Math.min(60, Math.round(p.days)));
+    let firstDay = this.day + Math.max(0, Math.min(14, Math.round(p.dayOffset)));
+    const start = parsed ?? 0;
+    const end = Math.min(1440, start + duration);
+    let firstStart = start, firstEnd = end;
+    if (firstDay === this.day) {
+      const now = Math.ceil(this.minute);
+      if (parsed === null) [firstStart, firstEnd] = [now, Math.min(1440, now + duration)];
+      else if (end <= now + 10) firstDay++; // déjà passé aujourd'hui : dès demain à la même heure
+      else firstStart = Math.max(start, now);
     }
+    const sid = this.nextSid++;
+    const when = `${firstDay === this.day ? "aujourd'hui" : firstDay === this.day + 1 ? "demain" : `dans ${firstDay - this.day} jours`} à ${hhmm(firstStart)}` +
+      `, ${duration >= 1440 ? "toute la journée" : `${Math.round(duration / 6) / 10} h par jour`}${days > 1 ? `, pendant ${days} jours` : ""}`;
+    const s: Scheduled = {
+      sid, p, geo,
+      summary: { kind: p.kind, title: p.title, description: p.description, location: p.location, streets: p.streets, route: p.route, days, when },
+      firstDay, lastDay: firstDay + days - 1, firstStart, firstEnd, start, end,
+      cohorts: cohortStats(this.agents, geo.zone, AGENT_SCALE, (a) => a.delayMinutes),
+      affected: Uint8Array.from(this.agents, (a) => (isAffected(a, geo.zone) ? 1 : 0)),
+      responses: null, applied: null, baseline: null, analysisSent: false, rerouted: 0,
+      zoneShops: p.kind === "pietonnisation" ? this.places.all.filter((pl) => (pl.kind === "shop" || pl.kind === "food" || pl.kind === "bar") && geo.zone.contains(pl.x, pl.z)) : [],
+    };
+    this.scheduled.set(sid, s);
+    if (firstDay === this.day) this.instantiate(s, firstStart, firstEnd);
+    this.outbox.push({ type: "cohortRequest", sid, event: s.summary, cohorts: s.cohorts });
+    return sid;
+  }
+
+  /** Annule une décision : les jours suivants sont supprimés, l'événement en cours s'arrête maintenant. */
+  cancelEvent(sid: number) {
+    this.scheduled.delete(sid);
+    this.dayPlan.events = this.dayPlan.events.filter((ev) => ev.sid !== sid || ev.start < this.minute);
+    for (const ev of this.dayPlan.events) if (ev.sid === sid) ev.end = Math.min(ev.end, Math.max(ev.start + 1, Math.ceil(this.minute)));
+    this.pendingReactions = this.pendingReactions.filter((ev) => ev.sid !== sid);
+  }
+
+  /** Place l'événement du jour correspondant à une décision dans le plan de la journée. */
+  private instantiate(s: Scheduled, start: number, end: number) {
+    const spec = EVENT_SPECS[s.p.kind], g = s.geo, intensity = Math.max(1, Math.min(3, s.p.intensity));
     const ev: CityEvent = {
       id: Math.max(-1, ...this.dayPlan.events.map((e) => e.id)) + 1,
-      kind: p.kind, title: p.title, description: p.description, x, z, start,
-      end: start + Math.max(10, p.durationMinutes),
-      attraction: spec.attraction * (intensity / 2), closedRoads, radius, intensity, byPlayer: true,
+      kind: s.p.kind, title: s.p.title, description: s.p.description, x: g.x, z: g.z, start, end,
+      attraction: spec.attraction * (intensity / 2), closedRoads: g.closedRoads, radius: g.radius, intensity, byPlayer: true,
+      sid: s.sid, dayIndex: this.day - s.firstDay + 1, days: s.lastDay - s.firstDay + 1, streets: s.p.streets,
+      ...(g.path ? { path: flatten(g.path), pathLength: g.path.length } : {}),
     };
     this.dayPlan.events.push(ev);
-    this.eventPlaces.set(ev.id, this.places.transient("event", x, z, ev.title));
+    const place = this.places.transient("event", g.x, g.z, ev.title);
+    this.eventPlaces.set(ev.id, place);
+    if (g.path) this.routeStays.set(place, { ev, path: g.path });
     if (spec.weather) {
-      const tempC = p.kind === "canicule" ? 33 + intensity * 2 : p.kind === "blizzard" ? -2 - intensity * 3 : this.dayPlan.weather.tempC;
+      const tempC = s.p.kind === "canicule" ? 33 + intensity * 2 : s.p.kind === "blizzard" ? -2 - intensity * 3 : this.dayPlan.weather.tempC;
       this.dayPlan.weather = { kind: spec.weather, tempC };
     }
+    if (this.day === s.firstDay) s.baseline = this.prevLog;
     this.pendingReactions.push(ev);
-    return ev;
   }
 
   /** Lieu sûr hors de la zone : le domicile s'il est épargné, sinon un parc à l'écart. */
@@ -272,6 +382,7 @@ export class Engine {
   /** Réaction de la ville au début d'un événement du joueur. */
   private react(ev: CityEvent) {
     const spec = EVENT_SPECS[ev.kind];
+    const s = ev.sid !== undefined ? this.scheduled.get(ev.sid) : undefined;
     const place = this.eventPlaces.get(ev.id)!;
     const dist = (x: number, z: number) => Math.hypot(x - ev.x, z - ev.z);
     const inZone = (p: Place) => dist(p.x, p.z) < ev.radius;
@@ -321,35 +432,252 @@ export class Engine {
 
       if (ev.kind === "panne" && this.rand() < 0.03) say(a, "🕯️", ["Plus de courant… où sont les bougies ?", "Mon frigo va tout décongeler !", "Toute la ville est dans le noir !"], true);
 
-      if (ev.attraction > 0 && free && a.profile !== "pendulaire") {
-        const interest = ev.kind === "ovni" ? (a.profile === "enfant" || a.profile === "etudiant" ? 2 : 1) : ev.kind === "feu_artifice" ? 1.5 : 1;
-        // pas trop loin : les curieux viennent surtout des environs
-        const reach = Math.max(0.15, 1 - d / 3000);
-        if (this.rand() < ev.attraction * interest * reach) {
-          const t = this.minute + 5 + this.rand() * Math.min(60, (ev.end - ev.start) / 2);
-          if (insertOuting(a, place, t, 30 + this.rand() * Math.min(120, ev.end - t))) {
-            if (this.rand() < 0.15) say(a, spec.icon, CURIOUS[ev.kind] ?? [`Je vais voir : ${ev.title} !`], true);
+      if (ev.kind === "greve" && a.profile === "frontalier" && a.exit?.kind === "station") this.strike(a);
+
+      // une rue piétonne attire les flâneurs des quartiers voisins
+      if (ev.kind === "pietonnisation" && s?.zoneShops.length && free && d < 1500 && this.rand() < 0.08) {
+        const shop = s.zoneShops[Math.floor(this.rand() * s.zoneShops.length)];
+        insertOuting(a, shop, Math.max(this.minute + 10, 10 * 60 + this.rand() * 8 * 60), 30 + this.rand() * 60);
+      }
+
+      // sans avis des groupes (événements extrêmes), les curieux des environs viennent voir
+      if (!s?.cohorts.length && ev.attraction > 0 && free && a.profile !== "pendulaire") this.maybeJoin(a, ev, place, ev.attraction * (ev.kind === "ovni" && (a.profile === "enfant" || a.profile === "etudiant") ? 2 : 1), spec.icon);
+    }
+
+    if (s) this.applyCohorts(s, ev, s.responses ?? localCohortResponses(s.summary, s.cohorts));
+  }
+
+  /** Grève du Léman Express : télétravail ou covoiturage vers Genève. */
+  private strike(a: Agent) {
+    const telework = this.rand() < 0.55;
+    const exit = this.genevaExits[a.id % this.genevaExits.length];
+    let changed = false;
+    for (let i = a.step + 1; i < a.plan.length; i++) {
+      if (a.plan[i].place.kind !== "station") continue;
+      a.plan[i].place = telework ? a.home : exit;
+      changed = true;
+    }
+    if (!changed) return;
+    if (!telework) a.carpoolDay = this.day;
+    a.lastThought = -999;
+    this.think(a, telework ? "💻" : "🚘", telework
+      ? ["Pas de Léman Express : télétravail aujourd'hui.", "Grève des trains, je bosse depuis chez moi."][a.id % 2]
+      : ["Grève du Léman Express : je covoiture avec un collègue jusqu'à Genève.", "Covoiturage ce matin, la douane va être chargée."][a.id % 2], 0.4);
+  }
+
+  /** L'habitant décide d'aller voir l'événement, s'il est libre et pas trop loin. */
+  private maybeJoin(a: Agent, ev: CityEvent, place: Place, chance: number, icon: string) {
+    const route = this.routeStays.has(place);
+    const reach = route ? 1 : Math.max(0.25, 1 - Math.hypot(a.x - ev.x, a.z - ev.z) / 3000);
+    if (this.rand() >= chance * reach) return false;
+    // un cortège se rejoint au départ ; ailleurs on passe un moment pendant l'événement
+    const t = route
+      ? Math.max(this.minute + 5, ev.start - 25 + this.rand() * 30)
+      : this.minute + 5 + this.rand() * Math.min(60, Math.max(0, (ev.end - Math.max(ev.start, this.minute)) / 2));
+    const stay = route ? ev.end - t - this.rand() * 15 : 30 + this.rand() * Math.min(120, ev.end - t);
+    if (stay < 20) return false;
+    // on peut quitter le bureau ou l'amphi pour manifester ; sinon il faut être chez soi
+    if (!insertOuting(a, place, t, stay) && !(ev.kind === "manifestation" && this.leaveFor(a, place, t, stay))) return false;
+    if (this.rand() < 0.12) this.think(a, icon, (CURIOUS[ev.kind] ?? [`Je vais voir : ${ev.title} !`])[a.id % 2] ?? `Je vais voir : ${ev.title} !`);
+    return true;
+  }
+
+  /** Quitte le travail ou l'école le temps d'un événement, puis y retourne. */
+  private leaveFor(a: Agent, place: Place, t: number, stay: number): boolean {
+    const i = a.plan.findIndex((act) => act.until > t);
+    if (i < 0 || i < a.step || (i === a.step && a.trip)) return false;
+    const cur = a.plan[i];
+    if (cur.place !== a.work || cur.until < t + stay + 20) return false;
+    a.plan.splice(i, 1, { place: cur.place, until: t }, { place, until: t + stay }, { place: cur.place, until: cur.until });
+    return true;
+  }
+
+  /**
+   * Applique les réactions décidées pour chaque groupe à ses membres, avec de la variabilité individuelle.
+   * Si des réactions ont déjà été appliquées aujourd'hui, seule la différence l'est.
+   */
+  private applyCohorts(s: Scheduled, ev: CityEvent, responses: CohortResponse[]) {
+    const prev = s.applied?.day === this.day ? s.applied.byId : null;
+    const byId = new Map(responses.map((r) => [r.id, r]));
+    const spec = EVENT_SPECS[ev.kind];
+    const zone = s.geo.zone;
+    const place = this.eventPlaces.get(ev.id)!;
+    const speakers = new Map<string, Agent[]>();
+    for (const a of this.agents) {
+      const r = byId.get(cohortId(a));
+      if (!r) continue;
+      const old = prev?.get(r.id);
+      const hit = isAffected(a, zone);
+      const more = (v: number, o = 0) => Math.max(0, v - (old ? o : 0));
+      if (hit) a.bias = { car: r.car, bike: r.bike, walk: r.walk };
+      // départ avancé ou retardé, si la personne n'est pas encore partie
+      const shift = r.departShift - (old?.departShift ?? 0);
+      if (hit && shift && a.step === 0 && !a.trip && a.plan.length > 1 && a.plan[0].until > this.minute) {
+        a.plan[0].until = Math.max(this.minute, a.plan[0].until + shift * (0.5 + this.rand()));
+      }
+      const avoid = r.avoidZone && !old?.avoidZone;
+      const cancel = more(r.cancelLeisure, old?.cancelLeisure);
+      for (let i = a.step + 1; i < a.plan.length; i++) {
+        const act = a.plan[i];
+        if (!LEISURE.has(act.place.kind) || act.place === a.work) continue;
+        if (cancel && this.rand() < cancel) act.place = a.home;
+        else if (avoid && zone.contains(act.place.x, act.place.z)) {
+          for (let k = 0; k < 6; k++) {
+            const alt = this.places.near(act.place.kind, a.home.x, a.home.z, this.rand, 8);
+            if (!zone.contains(alt.x, alt.z)) {
+              act.place = alt;
+              break;
+            }
           }
         }
+      }
+      const join = more(r.joinEvent, old?.joinEvent);
+      if (join > 0 && spec.attraction > 0 && a.profile !== "pendulaire" && !a.trip) this.maybeJoin(a, ev, place, join, spec.icon);
+      a.satisfaction = clamp01(a.satisfaction + (r.mood - (old?.mood ?? 0)) * (hit ? 0.02 : 0.006));
+      const trivial = !r.mood && !r.departShift && !r.joinEvent && !r.cancelLeisure && !r.avoidZone && Math.abs(r.car) + Math.abs(r.bike) + Math.abs(r.walk) < 0.1;
+      if (r.quote && !trivial && r.quote !== old?.quote && (hit || this.rand() < 0.2)) {
+        let list = speakers.get(r.id);
+        if (!list) speakers.set(r.id, (list = []));
+        if (list.length < 12) list.push(a);
+      }
+    }
+    // deux porte-parole par groupe expriment la réaction collective
+    for (const [id, list] of speakers) {
+      const r = byId.get(id)!;
+      const label = s.cohorts.find((c) => c.id === id)?.label ?? id;
+      for (const a of list.sort(() => this.rand() - 0.5).slice(0, 2)) {
+        a.lastThought = -999;
+        this.think(a, r.mood > 0 ? "😊" : r.mood < 0 ? "😠" : "💬", r.quote, 1, label);
+      }
+    }
+    s.applied = { day: this.day, byId };
+  }
+
+  /** Réactions des groupes reçues de Claude : appliquées tout de suite si l'événement a commencé. */
+  setCohortPlan(sid: number, responses: CohortResponse[]) {
+    const s = this.scheduled.get(sid);
+    if (!s) return;
+    s.responses = responses;
+    const ev = this.dayPlan.events.find((e) => e.sid === sid && this.minute >= e.start - (e.path ? MOBILIZE : 0) && this.minute < e.end);
+    if (ev && !this.pendingReactions.includes(ev)) this.applyCohorts(s, ev, responses);
+  }
+
+  /** Rues fermées à cette minute : décisions fixes, et rues autour du cortège qui avance. */
+  private applyClosures() {
+    const set = new Set<number>();
+    this.pedestrianZones = [];
+    for (const ev of this.dayPlan.events) {
+      if (this.minute < ev.start || this.minute >= ev.end) continue;
+      const s = ev.sid !== undefined ? this.scheduled.get(ev.sid) : undefined;
+      if (ev.kind === "pietonnisation" && s) this.pedestrianZones.push(s);
+      if (ev.kind === "manifestation" && s?.geo.path) {
+        const [head, tail] = cortege(ev, s.geo.path.length, this.minute);
+        for (const r of rollingClosure(s.geo.path, head, tail)) set.add(r);
+        // arrivé au bout, le rassemblement se poursuit à l'arrivée : on y déplace le lieu de l'événement
+        const place = this.eventPlaces.get(ev.id)!;
+        if (head >= s.geo.path.length && place.x === ev.x) this.movePlace(place, s.geo.path.xs.at(-1)!, s.geo.path.zs.at(-1)!);
+      } else for (const r of ev.closedRoads) set.add(r);
+    }
+    const key = [...set].sort((a, b) => a - b).join(",");
+    if (key === this.closureKey) return;
+    this.closureKey = key;
+    this.closedRoads = set;
+    const g = this.graph;
+    for (let e = 0; e < g.to.length; e++) g.closed[e] = set.has(g.edgeRoad[e]) ? 1 : 0;
+    g.updateCarCosts(true);
+    this.rerouteBlocked();
+  }
+
+  private movePlace(p: Place, x: number, z: number) {
+    p.x = x;
+    p.z = z;
+    p.walk = this.graph.nearest(x, z, Mode.Walk);
+    p.bike = this.graph.nearest(x, z, Mode.Bike);
+    p.car = this.graph.nearest(x, z, Mode.Car);
+  }
+
+  /** Les automobilistes dont l'itinéraire passe par une rue qui vient de fermer prennent une déviation. */
+  private rerouteBlocked() {
+    const g = this.graph;
+    const closing = this.dayPlan.events
+      .filter((ev) => ev.sid !== undefined && this.minute >= ev.start && this.minute < ev.end && (ev.closedRoads.length || ev.kind === "manifestation"))
+      .map((ev) => this.scheduled.get(ev.sid!))
+      .filter((s): s is Scheduled => !!s);
+    for (const a of this.agents) {
+      const t = a.trip;
+      if (!t || t.mode !== Mode.Car) continue;
+      let blocked = -1;
+      for (let i = t.seg + 1; i < t.path.edges.length; i++) if (g.closed[t.path.edges[i]]) { blocked = i; break; }
+      if (blocked < 0) continue;
+      const dest = t.path.nodes[t.path.nodes.length - 1];
+      const detour = g.route(t.path.nodes[t.seg + 1], dest, Mode.Car, true);
+      if (!detour) continue;
+      // arête en cours, puis la déviation
+      const nodes = new Int32Array(detour.nodes.length + 1);
+      nodes[0] = t.path.nodes[t.seg];
+      nodes.set(detour.nodes, 1);
+      const edges = new Int32Array(detour.edges.length + 1);
+      edges[0] = t.path.edges[t.seg];
+      edges.set(detour.edges, 1);
+      const cum = new Float32Array(nodes.length);
+      for (let i = 0; i < edges.length; i++) cum[i + 1] = cum[i] + g.len[edges[i]];
+      t.d -= t.path.cum[t.seg];
+      t.seg = 0;
+      t.path = { nodes, edges, cum, length: cum[edges.length] };
+      for (const s of closing) s.rerouted += AGENT_SCALE;
+      const name = this.city.roads[g.edgeRoad[t.path.edges[0]]].name;
+      this.think(a, "↪️", name ? `Route barrée, je contourne par ${name}.` : "Route barrée, je prends la déviation.", 0.25);
+    }
+  }
+
+  /** Journal horaire, impact en direct et analyse des décisions du joueur. */
+  private monitor() {
+    const h = Math.floor(this.minute / 60);
+    if (h !== this.lastHourLogged && h < 24) {
+      this.lastHourLogged = h;
+      const cells = new Map<number, number>();
+      let sat = 0;
+      for (const a of this.agents) {
+        sat += a.satisfaction;
+        if (!a.trip && a.plan[a.step]?.place === a.home) continue;
+        const k = cellKey(a.x, a.z);
+        cells.set(k, (cells.get(k) ?? 0) + 1);
+      }
+      this.log.people[h] = cells;
+      this.log.satisfaction[h] = sat / this.agents.length;
+    }
+    if (this.minute - this.lastImpact < 10) return;
+    this.lastImpact = this.minute;
+    for (const ev of this.dayPlan.events) {
+      const s = ev.sid !== undefined ? this.scheduled.get(ev.sid) : undefined;
+      if (!s || this.minute < ev.start + 15 || this.minute > ev.end + 10) continue;
+      const to = Math.min(this.minute, ev.end), from = Math.max(ev.start, to - 60);
+      const now = this.log.kpis(from, to, s.geo.zone, s.affected, AGENT_SCALE);
+      let before = s.baseline?.kpis(from, to, s.geo.zone, s.affected, AGENT_SCALE), reference = "hier à la même heure";
+      if (!before || s.baseline!.count(from, to, s.affected) < 10) {
+        before = this.log.kpis(ev.start - 60, ev.start, s.geo.zone, s.affected, AGENT_SCALE);
+        reference = "juste avant le début";
+      }
+      const active = this.minute < ev.end;
+      const place = this.eventPlaces.get(ev.id)!;
+      let participants = 0;
+      if (EVENT_SPECS[ev.kind].attraction > 0) for (const a of this.agents) if (!a.trip && a.plan[a.step]?.place === place) participants += AGENT_SCALE;
+      this.outbox.push({ type: "impact", impact: { sid: s.sid, title: ev.title, kind: ev.kind, minute: Math.round(this.minute), active, reference, before, now, rerouted: s.rerouted, participants } });
+      if (!s.analysisSent && this.minute - ev.start >= Math.min(60, (ev.end - ev.start) * 0.6)) {
+        s.analysisSent = true;
+        this.outbox.push({ type: "analysisRequest", sid: s.sid, event: s.summary, before, after: now, reference });
       }
     }
   }
 
-  /** Ferme ou rouvre les rues des événements selon l'heure. */
-  private applyClosures() {
-    let changed = false;
-    for (const ev of this.dayPlan.events) {
-      if (!ev.closedRoads.length) continue;
-      const active = this.minute >= ev.start && this.minute < ev.end;
-      if (active === this.closuresApplied.has(ev.id)) continue;
-      const roads = new Set(ev.closedRoads);
-      const g = this.graph;
-      for (let e = 0; e < g.to.length; e++) if (roads.has(g.edgeRoad[e])) g.closed[e] = active ? 1 : 0;
-      if (active) this.closuresApplied.add(ev.id);
-      else this.closuresApplied.delete(ev.id);
-      changed = true;
+  /** État du trafic par rue pour la carte : 0 vide, 1 fermée, 2..255 du plus lent au plus fluide. */
+  traffic(): Uint8Array {
+    const out = new Uint8Array(this.city.roads.length);
+    for (let r = 0; r < out.length; r++) {
+      if (this.closedRoads.has(r)) out[r] = 1;
+      else if (this.emaLoad[r] > 0.004) out[r] = 2 + Math.round(clamp01(this.emaFactor[r]) * 253);
     }
-    if (changed) this.graph.updateCarCosts(true);
+    return out;
   }
 
   /** Avance jusqu'à `target` minutes (dans la journée courante), par pas d'au plus une minute. */
@@ -364,12 +692,13 @@ export class Engine {
 
   private step(dtMin: number) {
     for (const ev of [...this.pendingReactions]) {
-      if (this.minute < ev.start) continue;
+      if (this.minute < ev.start - (ev.path ? MOBILIZE : 0)) continue;
       this.pendingReactions.splice(this.pendingReactions.indexOf(ev), 1);
       this.react(ev);
     }
     this.applyClosures();
     this.updateTraffic(dtMin);
+    this.monitor();
     const dtSec = dtMin * 60;
     const hour = Math.min(23, Math.floor(this.minute / 60));
     for (const a of this.agents) {
@@ -403,9 +732,17 @@ export class Engine {
       this.obsSum[r] += this.roadFactor[r] * dtMin;
       this.obsW[r] += dtMin;
     }
+    // moyenne glissante (~10 min) pour la couche trafic
+    const k = Math.min(1, 0.1 * dtMin);
+    for (let r = 0; r < this.emaLoad.length; r++) {
+      const load = this.roadLoad[r] > 0 ? this.roadLoad[r] / Math.max(1, this.roadStorage[r]) : 0;
+      this.emaLoad[r] += (load - this.emaLoad[r]) * k;
+      this.emaFactor[r] += (this.roadFactor[r] - this.emaFactor[r]) * k;
+    }
   }
 
   private chooseMode(a: Agent, from: Place, to: Place): Mode {
+    if (a.carpoolDay === this.day) return Mode.Car;
     if (a.profile === "frontalier" || a.profile === "pendulaire") {
       // sans voiture, le frontalier rejoint la gare à vélo ou à pied
       return a.hasCar ? Mode.Car : a.hasBike ? Mode.Bike : Mode.Walk;
@@ -422,6 +759,8 @@ export class Engine {
       options.push([Mode.Car, (d / 8.5 / 60) * this.policy.carFriction + 6 + parking]);
     }
     if (a.profile === "touriste") options[0][1] *= 0.6;
+    // préférences décidées pour son groupe face à un événement (1 point ≈ 12 min de « valeur »)
+    if (a.bias) for (const o of options) o[1] -= 12 * (o[0] === Mode.Car ? a.bias.car : o[0] === Mode.Bike ? a.bias.bike : a.bias.walk);
     // logit
     const beta = 0.25;
     const best = Math.min(...options.map((o) => o[1]));
@@ -458,6 +797,7 @@ export class Engine {
     a.trip = { path, mode, d: 0, seg: 0, startMinute: this.minute, freeMinutes: free / 60, style };
     if (style === "run") a.trip.freeMinutes *= WALK_SPEED / RUN_SPEED;
     this.trips[mode === Mode.Car ? "car" : mode === Mode.Bike ? "bike" : "walk"]++;
+    if (!style && from === a.home) a.usualMode = mode;
     if (mode === Mode.Car) {
       this.carMeters += path.length;
       this.carFree += free / 60;
@@ -505,6 +845,7 @@ export class Engine {
       const delay = Math.max(0, actual - t.freeMinutes);
       a.delayMinutes += delay;
       if (t.mode === Mode.Car) this.carDelay += delay;
+      if (!t.style) this.log.arrival(this.minute, a.id, t.mode, actual, t.freeMinutes);
     }
     a.step++;
     const place = a.plan[a.step].place;
@@ -512,10 +853,17 @@ export class Engine {
     a.z = place.z;
     if (place === a.home) a.tourMode = null;
     const blackout = !!this.active("panne") && place.kind !== "event" && place.kind !== "lake";
-    const spend = blackout ? 0 : (SPEND[place.kind] ?? 0) * (a.profile === "touriste" ? 1.5 : 1) * (0.6 + this.rand() * 0.8);
+    // dans une rue piétonne, on flâne plus longtemps et on dépense davantage
+    const pedestrian = this.pedestrianZones.some((s) => s.geo.zone.contains(place.x, place.z));
+    const spend = blackout ? 0 : (SPEND[place.kind] ?? 0) * (a.profile === "touriste" ? 1.5 : 1) * (pedestrian ? 1.3 : 1) * (0.6 + this.rand() * 0.8);
     if (spend > 0) {
       place.revenue += spend * AGENT_SCALE;
       a.spentToday += spend;
+      this.log.spend(this.minute, place.x, place.z, spend * AGENT_SCALE);
+    }
+    if (pedestrian && SPEND[place.kind]) {
+      a.needs.fun = clamp01(a.needs.fun + 0.1);
+      this.think(a, "🚶", ["Agréable, cette rue sans voitures.", "On entend enfin les terrasses plutôt que les moteurs.", "Je reste un peu plus longtemps, c'est calme."][a.id % 3], 0.2);
     }
     place.visits++;
     const eff = EFFECT[place.kind];
@@ -638,9 +986,12 @@ export class Engine {
       weather: this.dayPlan.weather,
       events: this.dayPlan.events.map((e) => ({ kind: e.kind, title: e.title, visits: this.eventPlaces.get(e.id)!.visits * AGENT_SCALE })),
     };
-    for (const id of [...this.closuresApplied]) this.closuresApplied.delete(id);
     this.graph.closed.fill(0);
     this.graph.updateCarCosts(true);
+    this.closureKey = "";
+    this.closedRoads = new Set();
+    this.prevLog = this.log;
+    this.log = new DayLog();
     this.day++;
     this.startDay();
     return report;
@@ -676,6 +1027,19 @@ export class Engine {
       } else {
         const place = a.plan[a.step]?.place;
         if (!place || !OUTDOOR.has(place.kind)) continue;
+        const stay = this.routeStays.get(place);
+        if (stay && this.minute < stay.ev.end) {
+          const p = this.onRoute(a, stay.ev, stay.path);
+          if (p) {
+            [x, z, heading, mode] = p;
+            a.x = x;
+            a.z = z;
+            const o = n * STRIDE;
+            out.set([x, z, heading, mode, PROFILES.indexOf(a.profile), a.id], o);
+            n++;
+            continue;
+          }
+        }
         // petits groupes qui discutent autour du point d'accès piéton, toujours sur la terre ferme ;
         // on envoie le centre du groupe et l'angle de la personne autour (le rendu les écarte selon le zoom)
         const ax = g.x[place.walk], az = g.z[place.walk];
@@ -703,6 +1067,42 @@ export class Engine {
       n++;
     }
     return n;
+  }
+
+  /**
+   * Position d'un participant sur le parcours : dans le cortège qui avance (manifestation),
+   * en course ou au bord du parcours (course à pied). [x, z, cap, mode] ou null.
+   */
+  private onRoute(a: Agent, ev: CityEvent, path: RoutePath): [number, number, number, number] | null {
+    const u = hash01(a.id * 7 + 3), v = hash01(a.id * 5 + 1);
+    let d: number, mode: number, lateral: number;
+    if (ev.kind === "manifestation") {
+      const [head, tail] = cortege(ev, path.length, this.minute);
+      if (head <= 0) {
+        // rassemblement : petits groupes sur les premières dizaines de mètres
+        d = u * 70;
+        mode = 0;
+      } else {
+        d = tail + (head - tail) * u;
+        mode = head >= path.length ? 0 : 1;
+      }
+      lateral = (v - 0.5) * 12;
+    } else if (u < 0.65) {
+      // coureurs : 9 à 15 km/h, en boucle sur le parcours
+      const speed = 150 + v * 100;
+      d = this.minute < ev.start ? v * 40 : ((this.minute - ev.start) * speed + v * 120) % path.length;
+      mode = this.minute < ev.start ? 0 : 4;
+      lateral = (hash01(a.id * 11) - 0.5) * 5;
+    } else {
+      // spectateurs le long du parcours
+      d = v * path.length;
+      mode = 0;
+      lateral = (hash01(a.id * 13) < 0.5 ? -1 : 1) * (7 + u * 4);
+    }
+    const [px, pz, heading] = pointAt(path, d);
+    const x = px - Math.cos(heading) * lateral, z = pz + Math.sin(heading) * lateral;
+    if (this.water.isWater(x, z)) return [px, pz, heading, mode];
+    return [x, z, mode === 0 ? hash01(a.id * 3 + 2) * Math.PI * 2 : heading, mode];
   }
 
   /** Fiche détaillée d'un habitant, pour l'interface. */
@@ -794,3 +1194,17 @@ export function mulberry32(seed: number) {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
 }
+
+function flatten(path: RoutePath): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < path.xs.length; i++) out.push(Math.round(path.xs[i] * 10) / 10, Math.round(path.zs[i] * 10) / 10);
+  return out;
+}
+
+/** "HH:MM" → minutes, ou null. */
+function parseHHMM(s: string): number | null {
+  const m = /^(\d{1,2})[:h](\d{2})?$/.exec(s.trim());
+  return m ? Math.min(1439, Number(m[1]) * 60 + Number(m[2] ?? 0)) : null;
+}
+
+const hhmm = (m: number) => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;
