@@ -14,6 +14,7 @@ import { DecisionsPanel } from "./ui/decisions";
 import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { TransitView } from "./render/transit";
+import { Intro } from "./render/intro";
 import type { Transit } from "./shared/city";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
@@ -44,8 +45,13 @@ async function main() {
   const world = new World($("#app"));
   const buildings = buildBuildings(city);
   world.setWindowMaterial(buildings.material);
-  const cityMeshes = [buildTerrain(city), buildGreens(city), buildRoads(city), buildTrees(city.greens), buildings.mesh];
-  world.scene.add(...cityMeshes, buildWater(city), buildLandmarks());
+  const trees = buildTrees(city.greens), landmarks = buildLandmarks();
+  const cityMeshes = [buildTerrain(city), buildGreens(city), buildRoads(city), trees, buildings.mesh];
+  world.scene.add(...cityMeshes, buildWater(city), landmarks);
+  // ouverture : carte vue du ciel, puis plongée qui révèle la 3D (?nointro pour l'éviter)
+  const intro = new Intro(world, buildings.mesh, [trees, landmarks], () => {});
+  if (params.has("nointro")) intro.skip();
+  else intro.start();
   setupViewStyle(world, cityMeshes, params.get("view"));
 
   // les visiteurs d'un jour (grands événements) s'ajoutent aux habitants
@@ -273,6 +279,7 @@ async function main() {
     }
     bubbles.update(t, selected, info?.mind ?? null, info ?? undefined);
 
+    intro.update(dt);
     world.render(dt);
     requestAnimationFrame(loop);
   };

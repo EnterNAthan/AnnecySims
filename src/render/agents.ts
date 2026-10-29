@@ -253,8 +253,8 @@ export class AgentsView {
       let x = frame[o], z = frame[o + 1], heading = frame[o + 2];
       const mode = frame[o + 3], profile = frame[o + 4], id = frame[o + 5];
       if (mode === 7) {
-        // bus : « profil » = ligne
-        const s = Math.min(zoom * 0.55, 8);
+        // bus : « profil » = ligne ; trois fois plus long qu'une voiture, on le grossit moins de loin
+        const s = Math.min(zoom * 0.35, 3.5);
         this.sphere.center.set(x, s, z);
         this.sphere.radius = 7 * s;
         if (!this.frustum.intersectsSphere(this.sphere)) continue;
