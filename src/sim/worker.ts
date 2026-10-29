@@ -13,6 +13,7 @@ const post = (msg: FromWorker, transfer: Transferable[] = []) => self.postMessag
 
 self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
+  if (msg.type === "aiConfig") { intelligence?.configure(msg.config); return; }
   if (msg.type === "init") {
     const city: City = await fetch("/city.json").then((r) => r.json());
     engine = new Engine(city, { ...msg, startDate: new Date(msg.startDate) });

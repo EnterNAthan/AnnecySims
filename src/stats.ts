@@ -1,5 +1,8 @@
 import "./stats.css";
 import type { ModelCall } from "../server/modelStats";
+import { setupAiConfig } from "./ui/aiConfig";
+
+setupAiConfig();
 
 interface Snapshot { since: number; model: string; active: number; total: number; failures: number; errors502: number; successes: number; averageMs: number; calls: ModelCall[] }
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;

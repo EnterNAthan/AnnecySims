@@ -1,8 +1,9 @@
 import type { Engine } from "./engine";
 import type { Agent } from "./population";
 import { insertOuting } from "./planner";
-import { AI_CONCURRENCY, AI_INTERVAL_MS, AI_MIN_DISPATCH_MS, DecisionSchema } from "../shared/intelligence";
+import { DecisionSchema } from "../shared/intelligence";
 import type { AiLog } from "../shared/intelligence";
+import { DEFAULT_AI_CONFIG, type AiConfig } from "../shared/aiConfig";
 
 interface Mind {
   memories: string[];
@@ -21,6 +22,16 @@ export class Intelligence {
   private active = 0;
   private cursor = 0;
   private nextDispatch = 0;
+  private config = { ...DEFAULT_AI_CONFIG };
+
+  configure(config: AiConfig) {
+    const oldInterval = this.config.intervalSeconds * 1000;
+    this.config = { ...config };
+    for (const mind of this.minds.values()) {
+      mind.next = Math.max(this.now(), mind.next + config.intervalSeconds * 1000 - oldInterval);
+      mind.memories = mind.memories.slice(-config.memoryLimit);
+    }
+  }
 
   constructor(private engine: Engine, private onLog: (entry: AiLog) => void = () => {}, private now = () => performance.now()) {}
 
@@ -43,7 +54,7 @@ export class Intelligence {
     const mind = this.mind(a);
     mind.memories.push(`Jour ${this.engine.day}, ${Math.round(this.engine.minute)} min : ${text}`);
     mind.revision++;
-    if (mind.memories.length > 48) mind.memories.shift();
+    if (mind.memories.length > this.config.memoryLimit) mind.memories.shift();
   }
 
   private nearby(a: Agent) {
@@ -54,12 +65,12 @@ export class Intelligence {
   tick() {
     const agents = this.engine.agents;
     const now = this.now();
-    if (!agents.length || now < this.nextDispatch) return;
-    for (let n = 0; n < agents.length && this.active < AI_CONCURRENCY; n++) {
+    if (!this.config.enabled || !agents.length || now < this.nextDispatch) return;
+    for (let n = 0; n < agents.length && this.active < this.config.concurrency; n++) {
       const a = agents[this.cursor++ % agents.length];
       const mind = this.mind(a);
       if (!mind.busy && now >= mind.next) {
-        this.nextDispatch = now + Math.max(AI_MIN_DISPATCH_MS, AI_INTERVAL_MS / agents.length);
+        this.nextDispatch = now + Math.max(1000 / this.config.requestsPerSecond, this.config.intervalSeconds * 1000 / agents.length);
         void this.reflect(a);
         break;
       }
@@ -146,7 +157,7 @@ export class Intelligence {
       this.log(a, "error", mind.status, started);
     } finally {
       mind.busy = false;
-      mind.next = Math.max(scheduled + AI_INTERVAL_MS, this.now() + (mind.failures ? Math.min(30000, 1000 * 2 ** Math.min(mind.failures, 5)) : 0));
+      mind.next = Math.max(scheduled + this.config.intervalSeconds * 1000, this.now() + (mind.failures ? Math.min(30000, 1000 * 2 ** Math.min(mind.failures, 5)) : 0));
       this.active--;
       this.onLog({ kind: "request", agentId: a.id, name: a.name, day: this.engine.day,
         minute: this.engine.minute, timestamp: Date.now(), text: "", active: this.active });

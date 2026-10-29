@@ -1,6 +1,7 @@
 // Messages échangés entre la page et le worker de simulation.
 import type { Profile } from "./population";
 import type { AiLog } from "../shared/intelligence";
+import type { AiConfig } from "../shared/aiConfig";
 import type { DayPlan, EventKind, Weather } from "./events";
 import type { EventProposal } from "../shared/catalog";
 
@@ -94,6 +95,7 @@ export interface Thought {
 }
 
 export type ToWorker =
+  | { type: "aiConfig"; config: AiConfig }
   | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string; aiEnabled?: boolean }
   /** avance jusqu'à `minute` du jour `day` ; renvoie le buffer pour réutilisation */
   | { type: "tick"; day: number; minute: number; buffer: ArrayBuffer }

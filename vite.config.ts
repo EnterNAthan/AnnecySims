@@ -2,6 +2,7 @@ import { defineConfig, loadEnv, type Plugin } from "vite";
 import { interpret } from "./server/interpret";
 import { decide } from "./server/intelligence";
 import { createModelStats } from "./server/modelStats";
+import { AiConfigSchema, DEFAULT_AI_CONFIG } from "./src/shared/aiConfig";
 
 /** POST /api/interpret { text, context } → proposition d'événement (Claude, ou mots-clés sans clé). */
 function interpretApi(apiKey?: string): Plugin {
@@ -40,7 +41,19 @@ export default defineConfig(({ mode }) => {
     configureServer(server) {
       let active = 0;
       const stats = createModelStats();
-      const model = env.ARKANE_MODEL || "deepseek-ai/DeepSeek-V4.1-Flash";
+      let config = { ...DEFAULT_AI_CONFIG, model: env.ARKANE_MODEL || DEFAULT_AI_CONFIG.model };
+      server.middlewares.use("/api/ai-config", (req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.setHeader("Cache-Control", "no-store");
+        if (req.method === "GET") { res.end(JSON.stringify(config)); return; }
+        if (req.method !== "POST") { res.statusCode = 405; res.end(); return; }
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; if (body.length > 8000) req.destroy(); });
+        req.on("end", () => {
+          try { config = AiConfigSchema.parse(JSON.parse(body)); res.end(JSON.stringify(config)); }
+          catch (error) { res.statusCode = 400; res.end(JSON.stringify({ error: error instanceof Error ? error.message : "Configuration invalide" })); }
+        });
+      });
       server.middlewares.use((req, _res, next) => {
         if (req.url?.split("?")[0] === "/stats") req.url = req.url.replace("/stats", "/stats.html");
         next();
@@ -49,12 +62,15 @@ export default defineConfig(({ mode }) => {
         res.setHeader("Content-Type", "application/json");
         res.setHeader("Cache-Control", "no-store");
         if (req.method !== "GET") { res.statusCode = 405; res.end(); return; }
-        res.end(JSON.stringify(stats.snapshot(active, model)));
+        res.end(JSON.stringify(stats.snapshot(active, config.model)));
       });
       server.middlewares.use("/api/agents/decide", (req, res) => {
         res.setHeader("Content-Type", "application/json");
         if (req.method !== "POST") { res.statusCode = 405; res.end(); return; }
-        if (active >= 8) {
+        const settings = { ...config };
+        const model = settings.model;
+        if (!settings.enabled) { res.statusCode = 409; res.end(JSON.stringify({ error: "IA suspendue dans la configuration" })); return; }
+        if (active >= settings.concurrency) {
           stats.record({ at: Date.now(), agent: "Non identifié", model, status: 429, duration: 0, error: "File pleine" });
           res.statusCode = 429; res.end(JSON.stringify({ error: "File pleine" })); return;
         }
@@ -70,7 +86,7 @@ export default defineConfig(({ mode }) => {
           try {
             const input = JSON.parse(body);
             try { agent = String(JSON.parse(input.context).person?.name ?? agent); } catch { /* contexte invalide : validation dans decide */ }
-            const result = await decide(input, env);
+            const result = await decide(input, env, settings);
             stats.record({ at, agent, model, status: 200, duration: Date.now() - at, result });
             res.end(JSON.stringify(result));
           }

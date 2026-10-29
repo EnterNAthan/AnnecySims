@@ -8,6 +8,7 @@ import { AgentsView } from "./render/agents";
 import { EventsView, hhmm } from "./render/events";
 import { ThoughtBubbles } from "./render/thoughts";
 import { setupCommandBar } from "./ui/command";
+import { AiConfigSchema } from "./shared/aiConfig";
 import { locationXZ } from "./shared/locations";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
@@ -34,6 +35,18 @@ async function main() {
     worker.addEventListener("message", (e: MessageEvent<FromWorker>) => e.data.type === "ready" && resolve(), { once: true });
   });
   send({ type: "init", residents, tourists, commuters, seed: 2026, startDate: startDate.toISOString(), aiEnabled: params.get("ai") !== "off" });
+  let lastAiConfig = "";
+  const syncAiConfig = async () => {
+    try {
+      const response = await fetch("/api/ai-config", { cache: "no-store" });
+      if (!response.ok) return;
+      const config = AiConfigSchema.parse(await response.json());
+      const serialized = JSON.stringify(config);
+      if (serialized !== lastAiConfig) { send({ type: "aiConfig", config }); lastAiConfig = serialized; }
+    } catch { /* La simulation reste disponible si la configuration est inaccessible. */ }
+    finally { window.setTimeout(syncAiConfig, 2000); }
+  };
+  void ready.then(syncAiConfig).catch(() => {});
 
   const city: City = await fetch("/city.json").then((r) => r.json());
   const world = new World($("#app"));

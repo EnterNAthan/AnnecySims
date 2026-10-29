@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { Engine } from "../src/sim/engine";
 import { Intelligence } from "../src/sim/intelligence";
+import { AiConfigSchema, DEFAULT_AI_CONFIG } from "../src/shared/aiConfig";
 
 const engine = new Engine(JSON.parse(readFileSync("public/city.json", "utf8")), {
   residents: 100, tourists: 0, commuters: 0, seed: 2026, startDate: new Date("2026-10-29"),
@@ -35,5 +36,15 @@ now += 1000;
 ai.tick();
 await new Promise((resolve) => setTimeout(resolve, 20));
 assert.ok(continuedPlan, "La décision suivante doit recevoir l'objectif, le plan et les résultats précédents");
+const beforePause = calls;
+ai.configure({ ...DEFAULT_AI_CONFIG, enabled: false });
+now += 60000;
+ai.tick();
+assert.equal(calls, beforePause, "La suspension doit arrêter les nouveaux appels");
+ai.configure({ ...DEFAULT_AI_CONFIG, enabled: true, memoryLimit: 4 });
+ai.tick();
+await new Promise((resolve) => setTimeout(resolve, 20));
+assert.ok(calls > beforePause, "La reprise doit relancer les décisions");
+assert.ok(!AiConfigSchema.safeParse({ ...DEFAULT_AI_CONFIG, concurrency: 0 }).success);
 assert.equal(engine.endDay().population, 100, "Un agent représente exactement une personne");
 console.log("100 personnes, concurrence, conversations et statistiques : OK");
