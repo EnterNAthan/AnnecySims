@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="fr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Annecy Sim</title>
+  </head>
+  <body>
+    <div id="app"></div>
+    <div id="loading">Chargement d'Annecy…</div>
+    <header id="hud">
+      <div class="title">Annecy</div>
+      <div id="time"></div>
+      <div id="weather"></div>
+      <div class="controls">
+        <button id="play" title="Pause / lecture"></button>
+        <button data-speed="0.33">x⅓</button>
+        <button data-speed="1" class="active">x1</button>
+        <button data-speed="3">x3</button>
+        <button data-speed="10">x10</button>
+        <button data-speed="realtime" title="1 seconde = 1 seconde">⏱ Temps réel</button>
+        <label><input id="labels" type="checkbox" checked /> Lieux</label>
+        <label title="Taille des habitants">Habitants <input id="agentSize" type="range" min="1" max="4" step="0.5" value="2" /></label>
+      </div>
+    </header>
+    <aside id="live" class="panel">
+      <div class="panel-title">En ce moment</div>
+      <div id="counts"></div>
+      <div id="legend"></div>
+    </aside>
+    <aside id="today" class="panel"></aside>
+    <div id="right">
+      <aside id="agent" class="panel hidden"></aside>
+      <aside id="report" class="panel hidden"></aside>
+    </div>
+    <div id="hint">Clique sur un habitant pour le suivre</div>
+    <footer id="credits">© contributeurs OpenStreetMap</footer>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

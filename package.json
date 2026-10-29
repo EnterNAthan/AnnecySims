@@ -1,0 +1,26 @@
+{
+  "name": "ane-sims",
+  "version": "1.0.0",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview",
+    "fetch-osm": "tsx scripts/fetch-osm.ts",
+    "build-city": "tsx scripts/build-city.ts",
+    "typecheck": "tsc",
+    "sim:headless": "tsx scripts/sim-headless.ts"
+  },
+  "description": "Simulation d'Annecy : habitants, maire et narrateur pilotés par Claude",
+  "dependencies": {
+    "three": "^0.169.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.17.6",
+    "@types/three": "^0.169.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  },
+  "private": true,
+  "type": "module"
+}
