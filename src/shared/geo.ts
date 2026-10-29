@@ -1,5 +1,5 @@
 // Zone simulée et projection lat/lon → mètres locaux (x = est, z = sud, comme Three.js).
-export const BBOX = { south: 45.888, west: 6.105, north: 45.916, east: 6.152 };
+export const BBOX = { south: 45.888, west: 6.105, north: 45.930, east: 6.165 };
 
 export const ORIGIN = { lat: 45.8992, lon: 6.1294 }; // Vieille ville / Palais de l'Île
 

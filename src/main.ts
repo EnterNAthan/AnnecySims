@@ -15,6 +15,7 @@ import { DecisionsPanel } from "./ui/decisions";
 import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { TransitView } from "./render/transit";
+import { Intro } from "./render/intro";
 import type { Transit } from "./shared/city";
 import { SimClock } from "./sim/clock";
 import { streetNames } from "./shared/streets";
@@ -29,11 +30,12 @@ const pct = (v: number) => `${Math.round(v * 100)} %`;
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 10000);
+  // ≈ 52 000 habitants dans la zone (Annecy et Annecy-le-Vieux), 1 habitant simulé pour 4
+  const residents = Number(params.get("pop") ?? 13000);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
   const tourists = Math.round(residents * 0.04);
   // actifs qui viennent travailler à Annecy depuis les communes voisines (≈ la moitié des emplois du centre)
-  const commuters = Math.round(residents * 0.35);
+  const commuters = Math.round(residents * 0.28);
   const startDate = new Date();
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
@@ -52,8 +54,13 @@ async function main() {
   const world = new World($("#app"));
   const buildings = buildBuildings(city);
   world.setWindowMaterial(buildings.material);
-  const cityMeshes = [buildTerrain(city), buildGreens(city), buildRoads(city), buildTrees(city.greens), buildings.mesh];
-  world.scene.add(...cityMeshes, buildWater(city), buildLandmarks());
+  const trees = buildTrees(city.greens), landmarks = buildLandmarks();
+  const cityMeshes = [buildTerrain(city), buildGreens(city), buildRoads(city), trees, buildings.mesh];
+  world.scene.add(...cityMeshes, buildWater(city), landmarks);
+  // ouverture : carte vue du ciel, puis plongée qui révèle la 3D (?nointro pour l'éviter)
+  const intro = new Intro(world, buildings.mesh, [trees, landmarks], () => {});
+  if (params.has("nointro")) intro.skip();
+  else intro.start();
   setupViewStyle(world, cityMeshes, params.get("view"));
 
   // les visiteurs d'un jour (grands événements) s'ajoutent aux habitants
@@ -74,6 +81,11 @@ async function main() {
     transit.showLines = busBtn.classList.contains("active");
     // les pastilles des parkings ne s'affichent qu'avec la couche transports
     document.body.classList.toggle("show-transit", transit.showLines);
+  };
+  const parkBtn = $<HTMLButtonElement>("#parkings");
+  parkBtn.onclick = () => {
+    parkBtn.classList.toggle("active");
+    transit.showParkings = parkBtn.classList.contains("active");
   };
   const preview = new PreviewLayer(city);
   world.scene.add(traffic.mesh, preview.group);
@@ -121,6 +133,7 @@ async function main() {
   const bubbles = new ThoughtBubbles(agents, (id) => select(id));
   world.scene.add(bubbles.group);
   const feed: Thought[] = [];
+  renderFeed(feed);
   $("#feed").addEventListener("click", (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
     if (row) select(Number(row.dataset.id));
@@ -344,6 +357,7 @@ async function main() {
     }
     bubbles.update(t, selected, info?.mind ?? null, info ?? undefined);
 
+    intro.update(dt);
     world.render(dt);
     requestAnimationFrame(loop);
   };
@@ -428,7 +442,8 @@ function renderCounts(c: LiveCounts) {
 
 function renderFeed(feed: Thought[]) {
   $("#feed").innerHTML = `<div class="panel-title">Voix de la ville</div>` +
-    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
+    (feed.length ? "" : `<div class="muted small">Les habitants réagissent ici aux événements et aux décisions. Cliquez sur quelqu'un pour lire ses pensées du quotidien.</div>`) +
+    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}${th.about && !th.voice ? ` <small class="about-tag">${th.about}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
 }
 
 /** Programme du jour : les décisions du joueur d'abord, la vie courante de la ville repliée. */

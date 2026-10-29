@@ -1270,3 +1270,125 @@ button.ask {
   cursor: pointer;
   font: inherit;
 }
+
+.about-tag {
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(255, 210, 122, 0.12);
+  color: #ffd27a;
+  font-size: 10px;
+}
+
+/* ---------- Ouverture : carte vue du ciel, puis plongée ---------- */
+
+#hud,
+#settings,
+.panel,
+#right,
+#command,
+#feed {
+  transition: opacity 1.2s ease;
+}
+
+body.intro #hud,
+body.intro #settings,
+body.intro .panel,
+body.intro #right,
+body.intro #command,
+body.intro #feed,
+body.intro #credits {
+  opacity: 0;
+  pointer-events: none;
+}
+
+body.intro .labels .event-label,
+body.intro .labels .parking-label,
+body.intro .labels .thought-bubble {
+  display: none;
+}
+
+#intro {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  cursor: pointer;
+  background: radial-gradient(ellipse at center, rgba(8, 14, 24, 0) 40%, rgba(8, 14, 24, 0.55) 100%);
+  transition: opacity 1.4s ease;
+}
+
+#intro.leaving {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.intro-title {
+  font-size: clamp(48px, 9vw, 120px);
+  font-weight: 200;
+  letter-spacing: 0.35em;
+  text-transform: uppercase;
+  color: #fff;
+  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
+  padding-left: 0.35em;
+}
+
+.intro-sub {
+  font-size: 15px;
+  letter-spacing: 0.12em;
+  color: rgba(255, 255, 255, 0.8);
+  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
+  animation: intro-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes intro-pulse {
+  50% {
+    opacity: 0.45;
+  }
+}
+
+/* ---------- Calques de la carte (barre verticale à gauche) ---------- */
+
+#layers {
+  position: fixed;
+  left: 16px;
+  top: 50%;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 6px;
+  border-radius: 999px;
+  transform: translateY(-50%);
+  background: var(--panel);
+  backdrop-filter: blur(10px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  transition: opacity 1.2s ease;
+}
+
+#layers button {
+  width: 38px;
+  height: 38px;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 17px;
+  cursor: pointer;
+  transition: background 0.2s;
+}
+
+#layers button:hover {
+  background: rgba(255, 255, 255, 0.08);
+}
+
+#layers button.active {
+  background: rgba(108, 195, 255, 0.25);
+}
+
+body.intro #layers {
+  opacity: 0;
+  pointer-events: none;
+}

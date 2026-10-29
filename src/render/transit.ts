@@ -12,9 +12,13 @@ export class TransitView {
   private readonly lines = new THREE.Group();
   private readonly labels: { obj: CSS2DObject; el: HTMLElement }[] = [];
 
+  private readonly parkingGroup = new THREE.Group();
+
   constructor(private readonly transit: Transit) {
-    this.group.add(this.lines);
+    this.group.add(this.lines, this.parkingGroup);
     this.lines.visible = false;
+    // parkings masqués par défaut (bouton 🅿️)
+    this.parkingGroup.visible = false;
     // parkings : pastille « P » colorée selon le remplissage
     for (const p of transit.parkings) {
       if (p.capacity < 80) continue;
@@ -24,7 +28,7 @@ export class TransitView {
       el.innerHTML = `<b>P</b><span>–</span>`;
       const obj = new CSS2DObject(el);
       obj.position.set(p.x, 8, p.z);
-      this.group.add(obj);
+      this.parkingGroup.add(obj);
       this.labels.push({ obj, el });
     }
   }
@@ -32,6 +36,10 @@ export class TransitView {
   /** Affiche les tracés des lignes et les arrêts (bouton « Bus »). */
   set showLines(on: boolean) {
     this.lines.visible = on;
+  }
+
+  set showParkings(on: boolean) {
+    this.parkingGroup.visible = on;
   }
 
   setLines(lines: Lines) {

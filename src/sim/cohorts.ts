@@ -12,6 +12,8 @@ const DISTRICTS: [string, number, number][] = [
   ["Les Fins", 45.911, 6.127],
   ["Novel – Teppes", 45.912, 6.14],
   ["Albigny", 45.908, 6.148],
+  ["Annecy-le-Vieux", 45.9205, 6.143],
+  ["Petit-Port – Barral", 45.914, 6.16],
   ["Vovray – Sacré-Cœur", 45.892, 6.125],
   ["Marquisats – rives sud", 45.8935, 6.136],
   ["Cran-Gevrier", 45.9, 6.105],

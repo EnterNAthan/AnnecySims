@@ -86,18 +86,20 @@ export class BusNetwork {
     const nodes: number[] = [], edges: number[] = [], stopD: number[] = [];
     let len = 0;
     const cars = d.stops.map((s) => g.nearest(s.x, s.z, Mode.Car));
+    // on repart toujours du dernier point atteint : si un arrêt est inaccessible (rue fermée),
+    // le bus ne le dessert pas et poursuit sa déviation jusqu'à l'arrêt suivant
+    let last = cars[0];
+    nodes.push(last);
     for (let i = 0; i < d.stops.length; i++) {
-      if (i === 0) {
-        nodes.push(cars[0]);
-        stopD.push(0);
-        continue;
-      }
-      const p = g.route(cars[i - 1], cars[i], Mode.Car);
-      if (p) {
-        for (let k = 0; k < p.edges.length; k++) {
-          edges.push(p.edges[k]);
-          nodes.push(p.nodes[k + 1]);
-          len += g.len[p.edges[k]];
+      if (i > 0) {
+        const p = g.route(last, cars[i], Mode.Car);
+        if (p) {
+          for (let k = 0; k < p.edges.length; k++) {
+            edges.push(p.edges[k]);
+            nodes.push(p.nodes[k + 1]);
+            len += g.len[p.edges[k]];
+          }
+          last = cars[i];
         }
       }
       stopD.push(len);
