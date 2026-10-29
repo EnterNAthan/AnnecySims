@@ -1,0 +1,71 @@
+replicaCount: 1
+
+image:
+  repository: registry.gitlab.com/ninantko/laurianedft
+  tag: "annecy-sims-0.0.1"            # defaults to .Chart.AppVersion
+  pullPolicy: IfNotPresent
+
+# Private GitLab registry (same as laurianedft); must exist in the release namespace
+imagePullSecrets:
+  - name: gitlab-registry
+
+# Non-secret LLM settings (Arkane, OpenAI-compatible API)
+arkane:
+  baseUrl: https://console.arkanecloud.com/api/v2
+  model: deepseek-ai/DeepSeek-V4.1-Flash-1017
+
+# ARKANE_API_KEY. Either let the chart create the Secret (apiKey),
+# or point to a Secret managed elsewhere (existingSecret, key ARKANE_API_KEY).
+# Without a key the app falls back to keyword interpretation.
+secret:
+  apiKey: ""
+  existingSecret: ane-sims-arkane   # created from secret.yaml (kubectl apply)
+
+service:
+  type: ClusterIP
+  port: 80
+
+containerPort: 8080
+
+# Shared Envoy Gateway; HTTP -> HTTPS redirect is handled globally
+# (envoy-gateway-system/http-to-https-redirect), TLS by the *.scale-app.cloud wildcard cert.
+httpRoute:
+  enabled: true
+  annotations: {}
+  parentRefs:
+    - name: gateway
+      namespace: envoy-gateway-system
+      sectionName: https-scale-app-cloud
+  hostnames:
+    - anne-sims.scale-app.cloud
+  # Envoy default is 15s; LLM calls (/api/*) can take up to 120s (server/llm.ts TIMEOUT_MS)
+  timeouts:
+    request: 130s
+    backendRequest: ""
+
+resources:
+  requests:
+    cpu: 100m
+    memory: 256Mi
+
+# LLM and 3D model caches; emptyDir = lost on restart (fine for a cache)
+dataVolume:
+  sizeLimit: 1Gi
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000    # "node" user of node:20-alpine
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

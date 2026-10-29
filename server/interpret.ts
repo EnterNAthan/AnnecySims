@@ -1,5 +1,5 @@
 // Endpoints IA : interprétation des commandes, réactions des groupes d'habitants, analyse d'impact.
-// Claude est appelé via Claude Code (`claude -p`) ; sans lui, on retombe sur des règles.
+// Le LLM est appelé via Arkane (server/llm.ts) ; sans lui, on retombe sur des règles.
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { EFFECTS, EVENT_KINDS, EVENT_SPECS, MOTIONS, NATURES, PLACEMENTS, PROPS, PROP_LABEL, SHAPES, type EventProposal } from "../src/shared/catalog";
@@ -8,7 +8,7 @@ import { LOCATIONS } from "../src/shared/locations";
 import { DEFAULT_ROUTE, interpretLocally } from "../src/shared/localInterpreter";
 import { matchStreet, streetNames } from "../src/shared/streets";
 import { localAnalysis, localCohortResponses, type Analysis, type CohortResponse, type CohortStat, type EventSummary, type Kpis } from "../src/shared/advisors";
-import { askClaude } from "./claudeCode";
+import { askLlm } from "./llm";
 import type { City } from "../src/shared/city";
 
 const LOCATION_NAMES = LOCATIONS.map((l) => l.name);
@@ -185,12 +185,12 @@ export function warm(texts: string[], context: { time: string; weather: string }
 
 async function interpretWithClaude(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
   try {
-    const out = await askClaude(interpretSystem(extreme), `Heure actuelle : ${context.time}. Météo : ${context.weather}.\nDemande : « ${text} »`, proposalSchema(extreme));
+    const out = await askLlm(interpretSystem(extreme), `Heure actuelle : ${context.time}. Météo : ${context.weather}.\nDemande : « ${text} »`, proposalSchema(extreme));
     if (!out.understood) return { error: out.note || "Ça ne ressemble pas à un événement pour la ville." };
     const { understood: _, ...p } = out;
     return resolveNames({ ...(p as Omit<EventProposal, "source">), intensity: p.intensity as 1 | 2 | 3, source: "claude" });
   } catch (err) {
-    console.warn("[interpret] Claude Code indisponible :", (err as Error).message);
+    console.warn("[interpret] LLM indisponible :", (err as Error).message);
     const local = interpretLocally(text, allStreets(), extreme);
     return local ?? { error: "Je n'ai pas reconnu la demande. Exemple : « ferme l'avenue de Genève pour travaux pendant 2 semaines »." };
   }
@@ -229,7 +229,7 @@ Pour une manifestation, la participation dépend du motif : quelques pourcents p
 
 export async function cohortResponses(ev: EventSummary, cohorts: CohortStat[]): Promise<{ responses: CohortResponse[]; source: "claude" | "local" }> {
   try {
-    const out = await askClaude(COHORT_SYSTEM, JSON.stringify({ evenement: ev, groupes: cohorts }), CohortSchema);
+    const out = await askLlm(COHORT_SYSTEM, JSON.stringify({ evenement: ev, groupes: cohorts }), CohortSchema);
     const ids = new Set(cohorts.map((c) => c.id));
     const responses = out.responses.filter((r) => ids.has(r.id));
     if (!responses.length) throw new Error("aucune réponse exploitable");
@@ -254,7 +254,7 @@ const ANALYSIS_SYSTEM = `Tu es l'analyste mobilité et économie de la ville d'A
 
 export async function analyze(ev: EventSummary, before: Kpis, after: Kpis, cohorts: CohortStat[], responses: CohortResponse[]): Promise<Analysis> {
   try {
-    const out = await askClaude(ANALYSIS_SYSTEM, JSON.stringify({ evenement: ev, avant: before, pendant: after, groupes: cohorts, reactions: responses }), AnalysisSchema);
+    const out = await askLlm(ANALYSIS_SYSTEM, JSON.stringify({ evenement: ev, avant: before, pendant: after, groupes: cohorts, reactions: responses }), AnalysisSchema);
     return { ...out, source: "claude" };
   } catch (err) {
     console.warn("[analyse] repli sur les règles :", (err as Error).message);
@@ -278,7 +278,7 @@ const BILAN_SYSTEM = `Tu es le service événementiel de la ville d'Annecy. À p
 
 export async function finalReport(ev: EventSummary, bilan: Record<string, number>): Promise<FinalReport> {
   try {
-    const out = await askClaude(BILAN_SYSTEM, JSON.stringify({ evenement: ev, bilan }), BilanSchema);
+    const out = await askLlm(BILAN_SYSTEM, JSON.stringify({ evenement: ev, bilan }), BilanSchema);
     return { ...out, source: "claude" };
   } catch (err) {
     console.warn("[bilan] repli sur les règles :", (err as Error).message);
