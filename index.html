@@ -4,26 +4,35 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Annecy Sim</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
   </head>
   <body>
     <div id="app"></div>
     <div id="loading">Chargement d'Annecy…</div>
     <header id="hud">
-      <div class="title">Annecy</div>
-      <div id="time"></div>
+      <div class="clock">
+        <div id="time"></div>
+        <div id="date"></div>
+      </div>
       <div id="weather"></div>
-      <div class="controls">
-        <button id="play" title="Pause / lecture"></button>
-        <button data-speed="0.33">x⅓</button>
-        <button data-speed="1" class="active">x1</button>
-        <button data-speed="3">x3</button>
-        <button data-speed="10">x10</button>
-        <button data-speed="realtime" title="1 seconde = 1 seconde">⏱ Temps réel</button>
-        <button id="traffic" title="Fluidité de chaque rue, du vert au rouge">🚦 Trafic</button>
-        <label><input id="labels" type="checkbox" checked /> Lieux</label>
-        <label title="Taille des habitants">Habitants <input id="agentSize" type="range" min="1" max="4" step="0.5" value="2" /></label>
+      <button id="play" title="Pause / lecture (espace)"></button>
+      <div class="seg">
+        <button data-speed="0.33">⅓×</button>
+        <button data-speed="1" class="active">1×</button>
+        <button data-speed="3">3×</button>
+        <button data-speed="10">10×</button>
+        <button data-speed="realtime" title="1 seconde = 1 seconde">Réel</button>
       </div>
     </header>
+    <div id="settings">
+      <button id="traffic" title="Fluidité de chaque rue, du vert au rouge">Trafic</button>
+      <label title="Noms des lieux"><input id="labels" type="checkbox" checked /> Lieux</label>
+      <label title="Taille des habitants">Taille <input id="agentSize" type="range" min="1" max="4" step="0.5" value="2" /></label>
+      <div class="seg" id="viewStyle" title="Style de la vue 3D"></div>
+      <button id="zen" title="Masquer l'interface (H)">◐</button>
+    </div>
     <aside id="live" class="panel">
       <div class="panel-title">En ce moment</div>
       <div id="counts"></div>
@@ -35,18 +44,18 @@
       <aside id="agent" class="panel hidden"></aside>
       <aside id="report" class="panel hidden"></aside>
     </div>
-    <aside id="feed" class="panel"><div class="panel-title">💬 Ce que disent les habitants</div></aside>
+    <aside id="feed" class="panel"><div class="panel-title">Voix de la ville</div></aside>
     <div id="command">
       <div id="proposal" class="hidden"></div>
       <form id="command-form" autocomplete="off">
-        <span>🏛️</span>
-        <input id="command-input" placeholder="Une décision pour Annecy ? ex. « ferme l'avenue de Genève pour travaux pendant 2 semaines »" />
-        <label class="extreme-toggle" title="Autorise les catastrophes spectaculaires (météorite, tsunami, OVNI…)"><input id="extreme" type="checkbox" /> Scénarios extrêmes</label>
-        <button type="submit">Envoyer</button>
+        <span>✦</span>
+        <input id="command-input" placeholder="Une décision pour Annecy ?" />
+        <label class="extreme-toggle" title="Autorise les catastrophes spectaculaires (météorite, tsunami, OVNI…)"><input id="extreme" type="checkbox" /> Extrêmes</label>
+        <button type="submit" title="Envoyer">↑</button>
       </form>
       <div id="chips"></div>
     </div>
-    <footer id="credits">© contributeurs OpenStreetMap</footer>
+    <footer id="credits">© OpenStreetMap</footer>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

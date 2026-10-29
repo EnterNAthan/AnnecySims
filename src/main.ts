@@ -1,9 +1,11 @@
 import "./style.css";
+import "./theme.css";
 import * as THREE from "three";
 import type { City } from "./shared/city";
 import { World } from "./render/scene";
 import { buildBuildings, buildGreens, buildRoads, buildTerrain, buildTrees, buildWater } from "./render/cityMeshes";
 import { buildLandmarks } from "./render/landmarks";
+import { applyViewStyle, VIEW_STYLES, type ViewStyle } from "./render/viewStyle";
 import { AgentsView } from "./render/agents";
 import { EventsView, hhmm } from "./render/events";
 import { ThoughtBubbles } from "./render/thoughts";
@@ -38,7 +40,9 @@ async function main() {
   const world = new World($("#app"));
   const buildings = buildBuildings(city);
   world.setWindowMaterial(buildings.material);
-  world.scene.add(buildTerrain(city), buildWater(city), buildGreens(city), buildRoads(city), buildTrees(city.greens), buildings.mesh, buildLandmarks());
+  const cityMeshes = [buildTerrain(city), buildGreens(city), buildRoads(city), buildTrees(city.greens), buildings.mesh];
+  world.scene.add(...cityMeshes, buildWater(city), buildLandmarks());
+  setupViewStyle(world, cityMeshes, params.get("view"));
 
   const total = residents + tourists + commuters;
   const agents = new AgentsView(total);
@@ -197,9 +201,14 @@ async function main() {
       send({ type: "tick", day: clock.day, minute: clock.minute, buffer: b }, [b]);
     }
     world.setTime(clock.date, clock.hour);
-    $("#time").textContent = clock.label();
+    // « Jour 3 · jeudi 29 octobre 2026 · 14:32 » → heure en grand, date en petit
+    const [dayLabel, dateLabel, timeLabel] = clock.label().split(" · ");
+    if ($("#time").textContent !== timeLabel) {
+      $("#time").textContent = timeLabel;
+      $("#date").innerHTML = `${dateLabel.replace(/ \d{4}$/, "")}<br>${dayLabel}`;
+    }
     const t = now / 1000;
-    if (frameCount) agents.update(frame, frameCount, world.camera.position.distanceTo(world.controls.target), world.night, t);
+    if (frameCount) agents.update(frame, frameCount, world.camera, world.camera.position.distanceTo(world.controls.target), world.night, t);
     events.update(clock.minute, t, world.night);
     preview.update(t);
     const active = events.activeKinds(clock.minute);
@@ -228,7 +237,7 @@ async function main() {
 
 function setupControls(clock: SimClock, agents: AgentsView) {
   const playBtn = $<HTMLButtonElement>("#play");
-  const syncPlay = () => (playBtn.textContent = clock.paused ? "▶" : "⏸");
+  const syncPlay = () => (playBtn.textContent = clock.paused ? "▶" : "❚❚");
   playBtn.onclick = () => {
     clock.paused = !clock.paused;
     syncPlay();
@@ -246,6 +255,33 @@ function setupControls(clock: SimClock, agents: AgentsView) {
   };
   const sizeInput = $<HTMLInputElement>("#agentSize");
   sizeInput.oninput = () => (agents.sizeBoost = Number(sizeInput.value));
+  // mode zen : masque les panneaux pour ne garder que la ville
+  const zen = () => document.body.classList.toggle("zen");
+  $("#zen").onclick = zen;
+  window.addEventListener("keydown", (e) => {
+    if (e.key === "h" && !(e.target instanceof HTMLInputElement)) zen();
+  });
+}
+
+/** Sélecteur « Verre / Réaliste » de la vue 3D, mémorisé dans le navigateur (?view=realiste pour forcer). */
+function setupViewStyle(world: World, meshes: THREE.Object3D[], forced: string | null) {
+  const el = $("#viewStyle");
+  let saved: string | null = null;
+  try {
+    saved = localStorage.getItem("viewStyle");
+  } catch {}
+  const set = (style: ViewStyle) => {
+    world.viewStyle = style;
+    applyViewStyle(style, meshes);
+    el.querySelectorAll<HTMLButtonElement>("button").forEach((b) => b.classList.toggle("active", b.dataset.view === style));
+    try {
+      localStorage.setItem("viewStyle", style);
+    } catch {}
+  };
+  el.innerHTML = VIEW_STYLES.map((v) => `<button data-view="${v.id}">${v.label}</button>`).join("");
+  el.querySelectorAll<HTMLButtonElement>("button").forEach((b) => (b.onclick = () => set(b.dataset.view as ViewStyle)));
+  const initial = forced ?? saved;
+  set(VIEW_STYLES.some((v) => v.id === initial) ? (initial as ViewStyle) : "verre");
 }
 
 function renderLegend() {
@@ -254,13 +290,13 @@ function renderLegend() {
 
 function renderCounts(c: LiveCounts) {
   const rows: [string, number][] = [
-    ["🚶 À pied", c.walk], ["🚲 À vélo", c.bike], ["🚗 En voiture", c.car], ["🌳 Dehors (lac, parc, événement)", c.outdoor], ["🚆 Hors d'Annecy", c.outside],
+    ["À pied", c.walk], ["À vélo", c.bike], ["En voiture", c.car], ["Dehors", c.outdoor], ["Hors d'Annecy", c.outside],
   ];
   $("#counts").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span class="v">${fmt(v)}</span>`).join("");
 }
 
 function renderFeed(feed: Thought[]) {
-  $("#feed").innerHTML = `<div class="panel-title">💬 Ce que disent les habitants</div>` +
+  $("#feed").innerHTML = `<div class="panel-title">Voix de la ville</div>` +
     feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
 }
 

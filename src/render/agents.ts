@@ -45,13 +45,13 @@ function personGeometry() {
     part(new THREE.BoxGeometry(0.42, 0.6, 0.24).translate(0, 1.13, 0), "#ffffff", { tint: 1 }),
     part(new THREE.BoxGeometry(0.1, 0.56, 0.12).translate(-0.27, 1.1, 0), "#ffffff", { tint: 1, limb: -1, pivot: 1.38 }),
     part(new THREE.BoxGeometry(0.1, 0.56, 0.12).translate(0.27, 1.1, 0), "#ffffff", { tint: 1, limb: 1, pivot: 1.38 }),
-    part(new THREE.IcosahedronGeometry(0.15, 1).translate(0, 1.6, 0), SKIN),
+    part(new THREE.IcosahedronGeometry(0.15, 0).translate(0, 1.6, 0), SKIN),
     part(new THREE.BoxGeometry(0.3, 0.09, 0.3).translate(0, 1.72, -0.02), HAIR),
   ])!;
 }
 
 function cyclistGeometry() {
-  const wheel = (z: number) => new THREE.TorusGeometry(0.33, 0.045, 4, 10).rotateY(Math.PI / 2).translate(0, 0.35, z);
+  const wheel = (z: number) => new THREE.TorusGeometry(0.33, 0.045, 3, 8).rotateY(Math.PI / 2).translate(0, 0.35, z);
   return mergeGeometries([
     part(wheel(0.52), "#1d1d1d"),
     part(wheel(-0.52), "#1d1d1d"),
@@ -64,13 +64,13 @@ function cyclistGeometry() {
     part(new THREE.BoxGeometry(0.4, 0.58, 0.24).rotateX(0.35).translate(0, 1.2, 0.08), "#ffffff", { tint: 1 }),
     part(new THREE.BoxGeometry(0.09, 0.09, 0.5).translate(-0.22, 1.25, 0.32), "#ffffff", { tint: 1 }),
     part(new THREE.BoxGeometry(0.09, 0.09, 0.5).translate(0.22, 1.25, 0.32), "#ffffff", { tint: 1 }),
-    part(new THREE.IcosahedronGeometry(0.15, 1).translate(0, 1.62, 0.22), SKIN),
+    part(new THREE.IcosahedronGeometry(0.15, 0).translate(0, 1.62, 0.22), SKIN),
     part(new THREE.SphereGeometry(0.17, 6, 3, 0, Math.PI * 2, 0, Math.PI / 2).translate(0, 1.68, 0.22), "#f1c40f"),
   ])!;
 }
 
 function carGeometry() {
-  const wheel = (x: number, z: number) => new THREE.CylinderGeometry(0.32, 0.32, 0.22, 8).rotateZ(Math.PI / 2).translate(x, 0.32, z);
+  const wheel = (x: number, z: number) => new THREE.CylinderGeometry(0.32, 0.32, 0.22, 6).rotateZ(Math.PI / 2).translate(x, 0.32, z);
   return mergeGeometries([
     part(new THREE.BoxGeometry(1.8, 0.62, 4.2).translate(0, 0.62, 0), "#ffffff", { tint: 1 }),
     part(new THREE.BoxGeometry(1.62, 0.55, 2.1).translate(0, 1.2, -0.25), "#26323f"),
@@ -83,6 +83,30 @@ function carGeometry() {
     part(new THREE.BoxGeometry(0.36, 0.14, 0.05).translate(0.6, 0.72, 2.11), "#fff4c8", { light: 1 }),
     part(new THREE.BoxGeometry(0.34, 0.12, 0.05).translate(-0.62, 0.74, -2.11), "#d42020", { light: 0.6 }),
     part(new THREE.BoxGeometry(0.34, 0.12, 0.05).translate(0.62, 0.74, -2.11), "#d42020", { light: 0.6 }),
+  ])!;
+}
+
+// Versions lointaines : quelques boîtes, sans membres animés (elles ne font que quelques pixels).
+function personFarGeometry() {
+  return mergeGeometries([
+    part(new THREE.BoxGeometry(0.38, 0.84, 0.18).translate(0, 0.42, 0), PANTS),
+    part(new THREE.BoxGeometry(0.5, 0.6, 0.24).translate(0, 1.13, 0), "#ffffff", { tint: 1 }),
+    part(new THREE.BoxGeometry(0.26, 0.3, 0.26).translate(0, 1.6, 0), SKIN),
+  ])!;
+}
+
+function cyclistFarGeometry() {
+  return mergeGeometries([
+    part(new THREE.BoxGeometry(0.08, 0.7, 1.7).translate(0, 0.35, 0), "#1d1d1d"),
+    part(new THREE.BoxGeometry(0.4, 1.0, 0.4).translate(0, 1.15, 0.08), "#ffffff", { tint: 1 }),
+  ])!;
+}
+
+function carFarGeometry() {
+  return mergeGeometries([
+    part(new THREE.BoxGeometry(1.8, 0.9, 4.2).translate(0, 0.55, 0), "#ffffff", { tint: 1 }),
+    part(new THREE.BoxGeometry(1.62, 0.55, 2.1).translate(0, 1.2, -0.25), "#26323f"),
+    part(new THREE.BoxGeometry(1.6, 0.14, 0.05).translate(0, 0.72, 2.11), "#fff4c8", { light: 1 }),
   ])!;
 }
 
@@ -144,9 +168,13 @@ export class AgentsView {
   frameNo = 0;
   scale = 1;
 
-  private readonly walkers: THREE.InstancedMesh;
-  private readonly cyclists: THREE.InstancedMesh;
-  private readonly cars: THREE.InstancedMesh;
+  // [proche, lointain] pour chaque type
+  private readonly walkers: [THREE.InstancedMesh, THREE.InstancedMesh];
+  private readonly cyclists: [THREE.InstancedMesh, THREE.InstancedMesh];
+  private readonly cars: [THREE.InstancedMesh, THREE.InstancedMesh];
+  private readonly frustum = new THREE.Frustum();
+  private readonly viewProj = new THREE.Matrix4();
+  private readonly sphere = new THREE.Sphere();
   private readonly uniforms = { uTime: { value: 0 }, uNight: { value: 0 } };
   private readonly profileColors = PROFILES.map((p) => new THREE.Color(PROFILE_COLOR[p]));
   private readonly carColors = CAR_COLORS.map((c) => new THREE.Color(c));
@@ -160,37 +188,46 @@ export class AgentsView {
     this.shownX = new Float32Array(capacity);
     this.shownZ = new Float32Array(capacity);
     this.shownFrame = new Int32Array(capacity).fill(-1);
-    const make = (geo: THREE.BufferGeometry) => {
+    const make = (geo: THREE.BufferGeometry, shadow: boolean) => {
       geo.setAttribute("aAnim", new THREE.InstancedBufferAttribute(new Float32Array(capacity * 2), 2).setUsage(THREE.DynamicDrawUsage));
       const mesh = new THREE.InstancedMesh(geo, animatedMaterial(this.uniforms), capacity);
       mesh.count = 0;
       mesh.frustumCulled = false;
-      mesh.castShadow = true;
+      // seuls les habitants proches projettent une ombre : au loin elle serait invisible
+      mesh.castShadow = shadow;
       mesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
       mesh.setColorAt(0, new THREE.Color()); // force l'allocation de instanceColor
       this.group.add(mesh);
       return mesh;
     };
-    this.walkers = make(personGeometry());
-    this.cyclists = make(cyclistGeometry());
-    this.cars = make(carGeometry());
+    this.walkers = [make(personGeometry(), true), make(personFarGeometry(), false)];
+    this.cyclists = [make(cyclistGeometry(), true), make(cyclistFarGeometry(), false)];
+    this.cars = [make(carGeometry(), true), make(carFarGeometry(), false)];
     this.group.name = "agents";
   }
 
   /**
    * Met à jour les instances depuis la trame du worker.
    * Les silhouettes grossissent quand la caméra s'éloigne, pour rester visibles.
+   * Seuls les habitants dans le champ de la caméra sont envoyés au GPU ; au-delà de quelques
+   * centaines de mètres, ils passent en version simplifiée sans animation ni ombre.
    */
-  update(frame: Float32Array, count: number, cameraDistance: number, night: number, time: number) {
+  update(frame: Float32Array, count: number, camera: THREE.Camera, cameraDistance: number, night: number, time: number) {
     this.frameNo++;
     this.uniforms.uTime.value = time;
     this.uniforms.uNight.value = night;
     const zoom = THREE.MathUtils.clamp(cameraDistance / 220, 1.5, 9) * this.sizeBoost;
     this.scale = zoom;
     const carZoom = Math.min(zoom * 0.55, 8);
-    let w = 0, b = 0, c = 0;
+    // distance (au carré) au-delà de laquelle une silhouette fait moins d'une douzaine de pixels
+    const lodPeople = (130 * zoom) ** 2, lodCars = (260 * carZoom) ** 2;
+    camera.updateMatrixWorld();
+    this.viewProj.multiplyMatrices(camera.projectionMatrix, camera.matrixWorldInverse);
+    this.frustum.setFromProjectionMatrix(this.viewProj);
+    const cx = camera.position.x, cy = camera.position.y, cz = camera.position.z;
+    const n = [0, 0, 0, 0, 0, 0]; // walkers proche/loin, vélos proche/loin, voitures proche/loin
     const anim = (mesh: THREE.InstancedMesh) => mesh.geometry.attributes.aAnim as THREE.InstancedBufferAttribute;
-    const aw = anim(this.walkers), ab = anim(this.cyclists);
+    const aw = anim(this.walkers[0]), ab = anim(this.cyclists[0]);
     for (let i = 0; i < count; i++) {
       const o = i * FRAME_STRIDE;
       let x = frame[o], z = frame[o + 1], heading = frame[o + 2];
@@ -206,34 +243,45 @@ export class AgentsView {
       this.shownX[id] = x;
       this.shownZ[id] = z;
       this.shownFrame[id] = this.frameNo;
+      const s = mode === 3 ? carZoom : zoom;
+      this.sphere.center.set(x, s, z);
+      this.sphere.radius = 2.5 * s;
+      if (!this.frustum.intersectsSphere(this.sphere)) continue;
+      const d2 = (x - cx) ** 2 + cy * cy + (z - cz) ** 2;
       this.q.setFromAxisAngle(this.up, heading);
       this.p.set(x, 0.4, z);
+      this.m.compose(this.p, this.q, this.s.setScalar(s));
       if (mode === 3) {
-        this.m.compose(this.p, this.q, this.s.setScalar(carZoom));
-        this.cars.setMatrixAt(c, this.m);
-        this.cars.setColorAt(c, this.carColors[id % this.carColors.length]);
-        c++;
+        const far = d2 > lodCars ? 1 : 0, k = n[4 + far]++;
+        this.cars[far].setMatrixAt(k, this.m);
+        this.cars[far].setColorAt(k, this.carColors[id % this.carColors.length]);
       } else if (mode === 2) {
-        this.m.compose(this.p, this.q, this.s.setScalar(zoom));
-        this.cyclists.setMatrixAt(b, this.m);
-        this.cyclists.setColorAt(b, this.profileColors[profile]);
-        ab.setXY(b, id * 1.7, 0.75);
-        b++;
+        const far = d2 > lodPeople ? 1 : 0, k = n[2 + far]++;
+        this.cyclists[far].setMatrixAt(k, this.m);
+        this.cyclists[far].setColorAt(k, this.profileColors[profile]);
+        if (!far) ab.setXY(k, id * 1.7, 0.75);
       } else {
-        this.m.compose(this.p, this.q, this.s.setScalar(zoom));
-        this.walkers.setMatrixAt(w, this.m);
-        this.walkers.setColorAt(w, this.profileColors[profile]);
+        const far = d2 > lodPeople ? 1 : 0, k = n[far]++;
+        this.walkers[far].setMatrixAt(k, this.m);
+        this.walkers[far].setColorAt(k, this.profileColors[profile]);
         // marche, course (grande foulée), promenade du chien (pas tranquille), à l'arrêt (bras seulement)
-        aw.setXY(w, id * 1.7, mode === 4 ? 0.95 : mode === 1 ? 0.55 : mode === 5 ? 0.4 : 0.06);
-        w++;
+        if (!far) aw.setXY(k, id * 1.7, mode === 4 ? 0.95 : mode === 1 ? 0.55 : mode === 5 ? 0.4 : 0.06);
       }
     }
-    for (const [mesh, n] of [[this.walkers, w], [this.cyclists, b], [this.cars, c]] as const) {
-      mesh.count = n;
-      mesh.instanceMatrix.needsUpdate = true;
-      if (mesh.instanceColor) mesh.instanceColor.needsUpdate = true;
-      anim(mesh).needsUpdate = true;
-    }
+    // n'envoie au GPU que la partie utilisée des buffers, pas toute la capacité
+    const upload = (attr: THREE.BufferAttribute, k: number) => {
+      attr.clearUpdateRanges();
+      attr.addUpdateRange(0, k * attr.itemSize);
+      attr.needsUpdate = true;
+    };
+    [...this.walkers, ...this.cyclists, ...this.cars].forEach((mesh, j) => {
+      const k = n[j];
+      mesh.count = k;
+      if (!k) return;
+      upload(mesh.instanceMatrix, k);
+      if (mesh.instanceColor) upload(mesh.instanceColor, k);
+      if (j % 2 === 0) upload(anim(mesh), k);
+    });
   }
 
   /** Habitant visible le plus proche d'un point écran (en px), ou -1. */
