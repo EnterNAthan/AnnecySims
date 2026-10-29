@@ -94,6 +94,8 @@ export interface Thought {
   minute: number;
   /** porte-parole d'un groupe d'habitants (« Frontaliers · Les Fins ») */
   voice?: string;
+  /** événement dont il est question */
+  about?: string;
 }
 
 /** Visiteurs venus de l'extérieur pour les grands événements (agents en réserve). */

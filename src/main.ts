@@ -110,6 +110,7 @@ async function main() {
   const bubbles = new ThoughtBubbles(agents, (id) => select(id));
   world.scene.add(bubbles.group);
   const feed: Thought[] = [];
+  renderFeed(feed);
   $("#feed").addEventListener("click", (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
     if (row) select(Number(row.dataset.id));
@@ -340,7 +341,8 @@ function renderCounts(c: LiveCounts) {
 
 function renderFeed(feed: Thought[]) {
   $("#feed").innerHTML = `<div class="panel-title">Voix de la ville</div>` +
-    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
+    (feed.length ? "" : `<div class="muted small">Les habitants réagissent ici aux événements et aux décisions. Cliquez sur quelqu'un pour lire ses pensées du quotidien.</div>`) +
+    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}${th.about && !th.voice ? ` <small class="about-tag">${th.about}</small>` : ""}<br><em>« ${th.text} »</em></div></div>`).join("");
 }
 
 function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {

@@ -1270,3 +1270,11 @@ button.ask {
   cursor: pointer;
   font: inherit;
 }
+
+.about-tag {
+  padding: 0 5px;
+  border-radius: 6px;
+  background: rgba(255, 210, 122, 0.12);
+  color: #ffd27a;
+  font-size: 10px;
+}

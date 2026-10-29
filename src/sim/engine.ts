@@ -27,6 +27,8 @@ export const AGENT_SCALE = 4;
 const RUN_SPEED = 2.8;
 /** une pensée au plus toutes les 90 minutes par habitant */
 const THOUGHT_COOLDOWN = 90;
+/** bulles affichées au plus par heure simulée, pour toute la ville */
+const BUBBLES_PER_HOUR = 5;
 const CO2_PER_CAR_KM = 0.12;
 
 const SPEND: Partial<Record<PlaceKind, number>> = { food: 16, bar: 11, grocery: 28, shop: 35, culture: 9, sport: 6, lake: 4, event: 12 };
@@ -152,6 +154,8 @@ export class Engine {
   private routeStays = new Map<Place, { ev: CityEvent; path: RoutePath }>();
   private closureKey = "";
   private dangerKey = "";
+  private bubbleHour = -1;
+  private bubbles = 0;
   /** les itinéraires des bus ont changé (à renvoyer à la page) */
   transitChanged = true;
   private closedRoads = new Set<number>();
@@ -308,12 +312,22 @@ export class Engine {
   }
 
   /** L'habitant exprime une pensée (bulle au-dessus de sa tête, fil d'actualité). */
-  private think(a: Agent, icon: string, text: string, chance = 1, voice?: string) {
+  /**
+   * L'habitant pense quelque chose : c'est toujours noté dans sa fiche, mais ne s'affiche en bulle et
+   * dans le fil que si c'est en rapport avec un événement (`about`) ou la voix d'un groupe, dans la
+   * limite de quelques bulles par heure : une ville où tout le monde commente tout ne serait pas crédible.
+   */
+  private think(a: Agent, icon: string, text: string, chance = 1, voice?: string, about?: string) {
     // les véhicules de transit ne sont pas des habitants : pas de bulles
     if (a.profile === "transit") return;
     if (this.minute - a.lastThought < THOUGHT_COOLDOWN || this.rand() > chance) return;
     a.lastThought = this.minute;
-    this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute), ...(voice ? { voice } : {}) });
+    const h = Math.floor(this.minute / 60);
+    if (h !== this.bubbleHour) [this.bubbleHour, this.bubbles] = [h, 0];
+    if ((about || voice) && this.bubbles < (voice ? BUBBLES_PER_HOUR * 2 : BUBBLES_PER_HOUR)) {
+      this.bubbles++;
+      this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute), ...(voice ? { voice } : {}), ...(about ? { about } : {}) });
+    }
     a.thoughtLog.push({ icon, text, day: this.day, minute: Math.round(this.minute) });
     if (a.thoughtLog.length > 8) a.thoughtLog.shift();
   }
@@ -665,7 +679,7 @@ export class Engine {
     const inZone = (p: Place) => dist(p.x, p.z) < ev.radius;
     const say = (a: Agent, icon: string, lines: string[], force = false) => {
       if (force) a.lastThought = -999;
-      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)]);
+      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)], 1, undefined, ev.title);
     };
     const wet = spec.weather === "pluie" || spec.weather === "neige";
 
@@ -709,7 +723,7 @@ export class Engine {
 
       if (ev.kind === "panne" && this.rand() < 0.03) say(a, "🕯️", ["Plus de courant… où sont les bougies ?", "Mon frigo va tout décongeler !", "Toute la ville est dans le noir !"], true);
 
-      if (ev.kind === "greve" && a.profile === "frontalier" && a.exit?.kind === "station") this.strike(a);
+      if (ev.kind === "greve" && a.profile === "frontalier" && a.exit?.kind === "station") this.strike(a, ev.title);
 
       // une rue piétonne attire les flâneurs des quartiers voisins
       if (ev.kind === "pietonnisation" && s?.zoneShops.length && free && d < 1500 && this.rand() < 0.08) {
@@ -727,7 +741,7 @@ export class Engine {
   }
 
   /** Grève du Léman Express : télétravail ou covoiturage vers Genève. */
-  private strike(a: Agent) {
+  private strike(a: Agent, about: string) {
     const telework = this.rand() < 0.55;
     const exit = this.genevaExits[a.id % this.genevaExits.length];
     let changed = false;
@@ -741,7 +755,7 @@ export class Engine {
     a.lastThought = -999;
     this.think(a, telework ? "💻" : "🚘", telework
       ? ["Pas de Léman Express : télétravail aujourd'hui.", "Grève des trains, je bosse depuis chez moi."][a.id % 2]
-      : ["Grève du Léman Express : je covoiture avec un collègue jusqu'à Genève.", "Covoiturage ce matin, la douane va être chargée."][a.id % 2], 0.4);
+      : ["Grève du Léman Express : je covoiture avec un collègue jusqu'à Genève.", "Covoiturage ce matin, la douane va être chargée."][a.id % 2], 0.4, undefined, about);
   }
 
   /** L'habitant décide d'aller voir l'événement, s'il est libre et pas trop loin. */
@@ -760,7 +774,7 @@ export class Engine {
     if (stay < 20) return false;
     // on peut quitter le bureau ou l'amphi pour manifester ; sinon il faut être chez soi
     if (!insertOuting(a, place, t, stay) && !(ev.kind === "manifestation" && this.leaveFor(a, place, t, stay))) return false;
-    if (this.rand() < 0.12) this.think(a, icon, (CURIOUS[ev.kind] ?? GOING[ev.traits?.nature ?? "festif"] ?? [`Je vais voir : ${ev.title} !`])[a.id % 2] ?? `Je vais voir : ${ev.title} !`);
+    if (this.rand() < 0.12) this.think(a, icon, (CURIOUS[ev.kind] ?? GOING[ev.traits?.nature ?? "festif"] ?? [`Je vais voir : ${ev.title} !`])[a.id % 2] ?? `Je vais voir : ${ev.title} !`, 1, undefined, ev.title);
     return true;
   }
 
@@ -829,7 +843,7 @@ export class Engine {
       const label = s.cohorts.find((c) => c.id === id)?.label ?? id;
       for (const a of list.sort(() => this.rand() - 0.5).slice(0, 2)) {
         a.lastThought = -999;
-        this.think(a, r.mood > 0 ? "😊" : r.mood < 0 ? "😠" : "💬", r.quote, 1, label);
+        this.think(a, r.mood > 0 ? "😊" : r.mood < 0 ? "😠" : "💬", r.quote, 1, label, ev.title);
       }
     }
     s.applied = { day: this.day, byId };
@@ -901,12 +915,12 @@ export class Engine {
       if (threat && next.travel !== "run") {
         // il se rendait dans la zone : demi-tour vers un lieu sûr
         next.place = this.safePlace(a, threat, false);
-        if (this.splice(a, next.place)) this.think(a, "⚠️", "Demi-tour, il ne faut surtout pas aller par là !", 0.5);
+        if (this.splice(a, next.place)) this.think(a, "⚠️", "Demi-tour, il ne faut surtout pas aller par là !", 0.5, undefined, threat.title);
         continue;
       }
       let crosses = false;
       for (let i = t.seg + 1; i < t.path.nodes.length && !crosses; i += 3) crosses = inside(g.x[t.path.nodes[i]], g.z[t.path.nodes[i]]);
-      if (crosses && this.splice(a, next.place)) this.think(a, "↪️", "Je fais un détour pour éviter la zone dangereuse.", 0.3);
+      if (crosses && this.splice(a, next.place)) this.think(a, "↪️", "Je fais un détour pour éviter la zone dangereuse.", 0.3, undefined, zones[0].title);
     }
   }
 
@@ -954,7 +968,7 @@ export class Engine {
       if (!this.splice(a, a.plan[a.step + 1].place)) continue;
       for (const s of closing) s.rerouted += AGENT_SCALE;
       const name = this.city.roads[g.edgeRoad[t.path.edges[0]]].name;
-      this.think(a, "↪️", name ? `Route barrée, je contourne par ${name}.` : "Route barrée, je prends la déviation.", 0.25);
+      this.think(a, "↪️", name ? `Route barrée, je contourne par ${name}.` : "Route barrée, je prends la déviation.", 0.25, undefined, closing[0]?.p.title ?? this.closureTitle());
     }
   }
 
@@ -1037,7 +1051,7 @@ export class Engine {
       a.lastThought = -999;
       this.think(a, "😠", late
         ? ["Il est presque minuit et la musique résonne encore jusqu'ici…", "Impossible de dormir avec ce concert.", "J'ai des enfants qui dorment, quand même !"][a.id % 3]
-        : ["Plus une place pour se garer dans le quartier.", "Que de monde en bas de chez moi aujourd'hui…", "Les voitures des visiteurs partout sur les trottoirs."][a.id % 3], 0.6);
+        : ["Plus une place pour se garer dans le quartier.", "Que de monde en bas de chez moi aujourd'hui…", "Les voitures des visiteurs partout sur les trottoirs."][a.id % 3], 0.6, undefined, ev.title);
     }
   }
 
@@ -1197,13 +1211,18 @@ export class Engine {
     const legs = plan?.slice(1);
     const fromNode = first?.kind === "move" ? first.from : node(from, mode);
     const toNode = first?.kind === "move" ? first.to : node(to, mode);
-    const firstMode = first?.kind === "move" ? first.mode : mode;
+    let firstMode = first?.kind === "move" ? first.mode : mode;
     // 30 % des automobilistes réévaluent leur itinéraire avec les temps de parcours de la veille
     let path = this.graph.route(fromNode, toNode, firstMode, firstMode === Mode.Car && this.rand() < 0.3);
+    let walkInstead = false;
     if (!path && mode !== Mode.Walk) {
-      mode = Mode.Walk;
+      // pas d'itinéraire (départ sur une rue fermée…) : on y va à pied, et c'est bien un piéton qui se déplace
+      if (mode === Mode.Car) this.releaseParking(a, first);
+      mode = firstMode = Mode.Walk;
       path = this.graph.route(from.walk, to.walk, mode);
+      walkInstead = true;
     }
+    if (walkInstead && legs) legs.length = 0;
     if (!path || (path.edges.length === 0 && !legs?.length)) {
       this.arrive(a); // inaccessible ou trop proche : on « téléporte »
       return;
@@ -1235,6 +1254,24 @@ export class Engine {
     if (mode === Mode.Car) {
       this.carMeters += path.length;
       this.carFree += free / 60;
+    }
+  }
+
+  /** Événement en cours à proximité d'un point (pour rattacher une pensée à sa cause), sinon undefined. */
+  private eventNear(x: number, z: number): string | undefined {
+    return this.dayPlan.events.find((ev) => this.minute >= ev.start && this.minute < ev.end && Math.hypot(ev.x - x, ev.z - z) < ev.radius + 600)?.title;
+  }
+
+  /** Fermeture de rue en cours (pour rattacher une plainte de bouchon à sa cause), sinon undefined. */
+  private closureTitle(): string | undefined {
+    return this.dayPlan.events.find((ev) => ev.closedRoads.length && this.minute >= ev.start && this.minute < ev.end)?.title;
+  }
+
+  /** Trajet en voiture abandonné : la place réservée au parking d'arrivée est rendue. */
+  private releaseParking(a: Agent, first: Leg | undefined) {
+    if (a.parked >= 0 && this.parkings && first?.kind === "move" && first.mode === Mode.Car) {
+      this.parkings.occupied[a.parked] -= AGENT_SCALE;
+      a.parked = -1;
     }
   }
 
@@ -1271,7 +1308,7 @@ export class Engine {
         P.occupied[p] += AGENT_SCALE;
         a.parked = p;
         legs.push({ kind: "move", mode: Mode.Car, from: start, to: P.car[p], release }, { kind: "move", mode: Mode.Walk, from: P.walk[p], to: to.walk });
-        if (Math.hypot(P.list[p].x - to.x, P.list[p].z - to.z) > 650) this.think(a, "🅿️", `Tout est complet près de ${to.name ?? "ma destination"}, je me gare au ${P.list[p].name}.`, 0.4);
+        if (Math.hypot(P.list[p].x - to.x, P.list[p].z - to.z) > 650) this.think(a, "🅿️", `Tout est complet près de ${to.name ?? "ma destination"}, je me gare au ${P.list[p].name}.`, 0.4, undefined, this.eventNear(to.x, to.z));
         return legs;
       }
       // tout est plein : hors de l'hypercentre on finit par trouver une place dans la rue,
@@ -1281,7 +1318,7 @@ export class Engine {
         return legs;
       }
       P.refused += AGENT_SCALE;
-      this.think(a, "😤", "Impossible de trouver une place, je tourne depuis dix minutes…", 0.5);
+      this.think(a, "😤", "Impossible de trouver une place, je tourne depuis dix minutes…", 0.5, undefined, this.eventNear(to.x, to.z));
       legs.push({ kind: "move", mode: Mode.Car, from: start, to: to.car, release }, { kind: "wait", minutes: 6 + this.rand() * 8 });
       return legs;
     }
@@ -1449,7 +1486,7 @@ export class Engine {
     }
     if (pedestrian && SPEND[place.kind]) {
       a.needs.fun = clamp01(a.needs.fun + 0.1);
-      this.think(a, "🚶", ["Agréable, cette rue sans voitures.", "On entend enfin les terrasses plutôt que les moteurs.", "Je reste un peu plus longtemps, c'est calme."][a.id % 3], 0.2);
+      this.think(a, "🚶", ["Agréable, cette rue sans voitures.", "On entend enfin les terrasses plutôt que les moteurs.", "Je reste un peu plus longtemps, c'est calme."][a.id % 3], 0.2, undefined, this.pedestrianZones.find((z) => z.geo.zone.contains(place.x, place.z))?.p.title);
     }
     place.visits++;
     const eff = EFFECT[place.kind];
@@ -1460,13 +1497,17 @@ export class Engine {
   /** Petites pensées à l'arrivée, selon le trajet et le lieu. */
   private reactToArrival(a: Agent, place: Place, t: Agent["trip"]) {
     const w = this.dayPlan.weather.kind;
+    // pensées du quotidien : seulement dans la fiche de l'habitant ; celles liées à un événement s'affichent
     const say = (icon: string, chance: number, ...lines: string[]) => this.think(a, icon, lines[Math.floor(this.rand() * lines.length)], chance);
+    const sayAbout = (about: string | undefined, icon: string, chance: number, ...lines: string[]) =>
+      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)], chance, undefined, about);
     const delay = t ? this.minute - t.startMinute - t.freeMinutes : 0;
     const spot = place.name ?? "la rive";
     if (t?.mode === Mode.Car && delay > 8) {
       const road = this.slowestRoad(t);
       const d = Math.round(delay);
-      say("😤", 0.8,
+      // un bouchon n'est commenté publiquement que s'il a une cause connue (fermeture, événement)
+      sayAbout(this.closureTitle() ?? this.eventNear(place.x, place.z), "😤", 0.8,
         road ? `${d} min de bouchons ${road}…` : `${d} min perdues dans les bouchons.`,
         road ? `Encore coincé·e ${road}, c'est infernal.` : "La circulation est infernale aujourd'hui.",
         "Il faudrait vraiment que la mairie fasse quelque chose pour le trafic.");
@@ -1495,10 +1536,11 @@ export class Engine {
       case "school": if (a.profile === "enfant") say("🎒", 0.1, "Vivement la récré !", "J'ai oublié mes devoirs…"); break;
       case "event": {
         const ev = this.dayPlan.events.find((e) => this.eventPlaces.get(e.id) === place);
-        if (ev?.kind === "marche") say("🧀", 0.6, "Du reblochon au marché, parfait.", "Les fruits du marché sont superbes.", "Le marché de la vieille ville, une institution.");
-        else if (ev?.kind === "concert") say("🎶", 0.7, "Super ambiance au concert !", "Ce groupe est génial.", "Le son porte jusqu'au lac !");
-        else if (ev?.kind === "brocante") say("🪑", 0.6, "Dégoté une vieille lampe à la brocante.", "Que de trésors à la brocante !");
-        else if (ev?.traits) say(ev.traits.icon, 0.5, ...(ENJOY[ev.traits.nature] ?? [`Sympa, ${place.name}.`]).map((l) => l.replace("{}", ev.title)));
+        const about = ev?.title;
+        if (ev?.kind === "marche") sayAbout(about, "🧀", 0.4, "Du reblochon au marché, parfait.", "Les fruits du marché sont superbes.", "Le marché de la vieille ville, une institution.");
+        else if (ev?.kind === "concert") sayAbout(about, "🎶", 0.5, "Super ambiance au concert !", "Ce groupe est génial.", "Le son porte jusqu'au lac !");
+        else if (ev?.kind === "brocante") sayAbout(about, "🪑", 0.4, "Dégoté une vieille lampe à la brocante.", "Que de trésors à la brocante !");
+        else if (ev?.traits) sayAbout(about, ev.traits.icon, 0.35, ...(ENJOY[ev.traits.nature] ?? [`Sympa, ${place.name}.`]).map((l) => l.replace("{}", ev.title)));
         else say("✨", 0.5, `Sympa, ${place.name}.`);
         break;
       }
