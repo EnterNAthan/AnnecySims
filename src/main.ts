@@ -14,7 +14,7 @@ import { DecisionsPanel } from "./ui/decisions";
 import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { TransitView } from "./render/transit";
-import { Intro } from "./render/intro";
+import { MarcStory } from "./render/marc";
 import type { Transit } from "./shared/city";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
@@ -48,10 +48,9 @@ async function main() {
   const trees = buildTrees(city.greens), landmarks = buildLandmarks();
   const cityMeshes = [buildTerrain(city), buildGreens(city), buildRoads(city), trees, buildings.mesh];
   world.scene.add(...cityMeshes, buildWater(city), landmarks);
-  // ouverture : carte vue du ciel, puis plongée qui révèle la 3D (?nointro pour l'éviter)
-  const intro = new Intro(world, buildings.mesh, [trees, landmarks], () => {});
-  if (params.has("nointro")) intro.skip();
-  else intro.start();
+  // Marc, coincé dans les bouchons : gros plan d'ouverture, puis recul au clic (?nointro pour l'éviter)
+  const marc = new MarcStory(city, world);
+  world.scene.add(marc.group);
   setupViewStyle(world, cityMeshes, params.get("view"));
 
   // les visiteurs d'un jour (grands événements) s'ajoutent aux habitants
@@ -66,6 +65,7 @@ async function main() {
   const transit = new TransitView(transitData);
   world.scene.add(transit.group);
   agents.setBusColors(transitData.lines.map((l) => l.colour));
+  agents.carMask = (x, z) => marc.hidesCar(x, z);
   const busBtn = $<HTMLButtonElement>("#bus-lines");
   busBtn.onclick = () => {
     busBtn.classList.toggle("active");
@@ -79,9 +79,25 @@ async function main() {
     traffic.flow = trafficBtn.classList.contains("active");
   };
 
-  const clock = new SimClock(startDate, params.has("h") ? Number(params.get("h")) * 60 : 6 * 60);
+  // Marc part au travail : l'histoire commence à 7 h 58
+  const clock = new SimClock(startDate, params.has("h") ? Number(params.get("h")) * 60 : 7 * 60 + 58);
   if (params.has("paused")) clock.paused = true;
   setupControls(clock, agents);
+  const intro = !params.has("nointro");
+  // présentation : après l'ouverture, la ville et la barre de réglages, sans les panneaux (bouton ◐ ou touche H pour les afficher)
+  if (intro) document.body.classList.add("presenting");
+  if (intro) {
+    // ville figée pendant le gros plan ; au bout du recul, elle repart en temps réel, au rythme de Marc
+    clock.paused = true;
+    marc.startIntro(
+      () => {
+        clock.paused = params.has("paused");
+        $<HTMLButtonElement>('[data-speed="realtime"]').click();
+        $<HTMLButtonElement>("#play").textContent = clock.paused ? "▶" : "❚❚";
+      },
+      () => {},
+    );
+  } else marc.skipIntro();
   renderLegend();
 
   // --- sélection d'un habitant ---
@@ -89,7 +105,12 @@ async function main() {
   marker.visible = false;
   world.scene.add(marker);
   let selected = -1, follow = true, info: AgentInfo | null = null;
+  const marcBtn = $<HTMLButtonElement>("#follow-marc");
   const select = (id: number) => {
+    if (id >= 0) {
+      marc.following = false;
+      marcBtn.classList.remove("active");
+    }
     selected = id;
     follow = true;
     info = null;
@@ -112,7 +133,24 @@ async function main() {
   world.controls.addEventListener("start", () => {
     follow = false;
     world.flyTo = null;
+    marc.following = false;
+    marcBtn.classList.remove("active");
   });
+  const followMarc = () => {
+    if (marc.introRunning) return;
+    select(-1);
+    followedEvent = -1;
+    marc.follow();
+    marcBtn.classList.add("active");
+  };
+  marcBtn.onclick = () => {
+    if (marc.following) {
+      marc.following = false;
+      world.flyTo = null;
+      marcBtn.classList.remove("active");
+    } else followMarc();
+  };
+  document.addEventListener("click", (e) => (e.target as HTMLElement).closest(".marc-tag") && followMarc());
   const bubbles = new ThoughtBubbles(agents, (id) => select(id));
   world.scene.add(bubbles.group);
   const feed: Thought[] = [];
@@ -130,11 +168,23 @@ async function main() {
   });
 
   // accès console pour le débogage : ?debug
-  if (params.has("debug")) Object.assign(window, { sim: { world, agents, clock, select, events } });
+  if (params.has("debug")) Object.assign(window, { sim: { world, agents, clock, select, events, marc } });
 
-  $("#loading").textContent = "Installation des habitants…";
-  await ready;
+  // Marc s'affiche tout de suite ; les habitants s'installent pendant ce temps dans le worker
   $("#loading").remove();
+  let booting = true, bootLast = performance.now();
+  const boot = (now: number) => {
+    if (!booting) return;
+    const dt = Math.min(0.1, (now - bootLast) / 1000);
+    bootLast = now;
+    world.setTime(clock.date, clock.hour);
+    marc.update(dt, 0, now / 1000, world.camera.position.distanceTo(world.controls.target), agents.sizeBoost);
+    world.render(dt);
+    requestAnimationFrame(boot);
+  };
+  requestAnimationFrame(boot);
+  await ready;
+  booting = false;
 
   // Commandes en langage naturel → aperçu → décision confirmée par le joueur.
   let currentPlan: DayPlan | null = null;
@@ -254,6 +304,12 @@ async function main() {
       $("#date").innerHTML = `${dateLabel.replace(/ \d{4}$/, "")}<br>${dayLabel}`;
     }
     const t = now / 1000;
+    const camDistance = world.camera.position.distanceTo(world.controls.target);
+    // le trafic mis en scène autour de Marc suit l'horloge : temps réel, accéléré, ou figé
+    const rate = clock.paused ? 0 : clock.realtime ? 1 : Math.min(6, 2 * clock.speed);
+    marc.update(dt, rate, t, camDistance, agents.sizeBoost);
+    agents.group.visible = marc.crowdVisible;
+    bubbles.group.visible = marc.crowdVisible;
     if (frameCount) agents.update(frame, frameCount, world.camera, world.camera.position.distanceTo(world.controls.target), world.night, t);
     events.update(clock.minute, t, world.night);
     preview.update(t);
@@ -279,7 +335,6 @@ async function main() {
     }
     bubbles.update(t, selected, info?.mind ?? null, info ?? undefined);
 
-    intro.update(dt);
     world.render(dt);
     requestAnimationFrame(loop);
   };
@@ -307,7 +362,10 @@ function setupControls(clock: SimClock, agents: AgentsView) {
   const sizeInput = $<HTMLInputElement>("#agentSize");
   sizeInput.oninput = () => (agents.sizeBoost = Number(sizeInput.value));
   // mode zen : masque les panneaux pour ne garder que la ville
-  const zen = () => document.body.classList.toggle("zen");
+  const zen = () => {
+    if (document.body.classList.contains("presenting")) document.body.classList.remove("presenting");
+    else document.body.classList.toggle("zen");
+  };
   $("#zen").onclick = zen;
   window.addEventListener("keydown", (e) => {
     if (e.key === "h" && !(e.target instanceof HTMLInputElement)) zen();

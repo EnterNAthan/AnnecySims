@@ -1279,7 +1279,7 @@ button.ask {
   font-size: 10px;
 }
 
-/* ---------- Ouverture : carte vue du ciel, puis plongée ---------- */
+/* ---------- Ouverture : gros plan sur Marc, puis recul ---------- */
 
 #hud,
 #settings,
@@ -1301,51 +1301,114 @@ body.intro #credits {
   pointer-events: none;
 }
 
-body.intro .labels .event-label,
-body.intro .labels .parking-label,
-body.intro .labels .thought-bubble {
-  display: none;
+body.intro .labels > :not(.marc-ui) {
+  visibility: hidden;
 }
 
-#intro {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
+.marc-bubble-anchor {
+  width: 0;
+  height: 0;
+}
+
+.marc-bubble {
+  position: absolute;
+  bottom: 14px;
+  left: 0;
+  width: max-content;
+  max-width: 260px;
+  padding: 9px 14px;
+  border-radius: 16px;
+  background: #fff;
+  color: #1d2533;
+  font-size: 17px;
+  font-weight: 600;
+  line-height: 1.25;
+  box-shadow: 0 6px 22px rgba(0, 0, 0, 0.4);
+  transform: translateX(-50%);
+  animation: marc-pop 0.25s ease-out;
+}
+
+.marc-bubble::after {
+  content: "";
+  position: absolute;
+  bottom: -9px;
+  left: 50%;
+  margin-left: -9px;
+  border: 9px solid transparent;
+  border-bottom: 0;
+  border-top-color: #fff;
+}
+
+.marc-bubble.honk {
+  background: #ffd84d;
+  font-size: 26px;
+  font-weight: 800;
+  letter-spacing: 0.04em;
+  animation: marc-shake 0.12s linear 6;
+}
+
+.marc-bubble.honk::after {
+  border-top-color: #ffd84d;
+}
+
+@keyframes marc-pop {
+  from {
+    opacity: 0;
+    scale: 0.7;
+  }
+}
+
+@keyframes marc-shake {
+  50% {
+    translate: 3px -2px;
+  }
+}
+
+.marc-tag {
   display: flex;
-  flex-direction: column;
   align-items: center;
-  justify-content: center;
-  gap: 14px;
+  gap: 5px;
+  padding: 3px 10px 3px 6px;
+  border: 2px solid #ff5a3c;
+  border-radius: 14px;
+  background: rgba(16, 22, 32, 0.9);
+  color: #fff;
+  font-size: 13px;
+  white-space: nowrap;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.4);
+  pointer-events: auto;
   cursor: pointer;
-  background: radial-gradient(ellipse at center, rgba(8, 14, 24, 0) 40%, rgba(8, 14, 24, 0.55) 100%);
-  transition: opacity 1.4s ease;
 }
 
-#intro.leaving {
+#follow-marc {
+  position: fixed;
+  top: 66px;
+  right: 16px;
+  z-index: 10;
+  height: 40px;
+  padding: 0 16px;
+  border: 2px solid rgba(255, 90, 60, 0.7);
+  border-radius: 999px;
+  background: rgba(16, 22, 32, 0.85);
+  color: #fff;
+  font: 500 13px Inter, sans-serif;
+  cursor: pointer;
+  transition: opacity 1.2s ease, background 0.2s;
+}
+
+#follow-marc:hover,
+#follow-marc.active {
+  background: #ff5a3c;
+}
+
+body.intro #follow-marc {
   opacity: 0;
   pointer-events: none;
 }
 
-.intro-title {
-  font-size: clamp(48px, 9vw, 120px);
-  font-weight: 200;
-  letter-spacing: 0.35em;
-  text-transform: uppercase;
-  color: #fff;
-  text-shadow: 0 4px 30px rgba(0, 0, 0, 0.6);
-  padding-left: 0.35em;
-}
-
-.intro-sub {
-  font-size: 15px;
-  letter-spacing: 0.12em;
-  color: rgba(255, 255, 255, 0.8);
-  text-shadow: 0 2px 10px rgba(0, 0, 0, 0.7);
-  animation: intro-pulse 2.4s ease-in-out infinite;
-}
-
-@keyframes intro-pulse {
-  50% {
-    opacity: 0.45;
-  }
+body.presenting .panel,
+body.presenting #right,
+body.presenting #command {
+  opacity: 0;
+  pointer-events: none;
 }

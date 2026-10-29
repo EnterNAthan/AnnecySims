@@ -52,8 +52,7 @@ body {
 /* ---------- îlot central : heure, météo, vitesse ---------- */
 #hud {
   top: 14px;
-  left: 50%;
-  transform: translateX(-50%);
+  left: 16px;
   gap: 18px;
   padding: 7px 7px 7px 22px;
   border-radius: 999px;

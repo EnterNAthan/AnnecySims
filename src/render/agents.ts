@@ -172,13 +172,15 @@ function animatedMaterial(uniforms: { uTime: { value: number }; uNight: { value:
 export class AgentsView {
   readonly group = new THREE.Group();
   /** exagération visuelle choisie dans l'interface */
-  sizeBoost = 2;
+  sizeBoost = 1;
   /** position affichée de chaque habitant (index = id), et numéro de la dernière trame où il était visible */
   readonly shownX: Float32Array;
   readonly shownZ: Float32Array;
   readonly shownFrame: Int32Array;
   frameNo = 0;
   scale = 1;
+  /** voitures et bus à ne pas dessiner à cet endroit (file mise en scène autour de Marc) */
+  carMask: ((x: number, z: number) => boolean) | null = null;
 
   // [proche, lointain] pour chaque type
   private readonly walkers: [THREE.InstancedMesh, THREE.InstancedMesh];
@@ -252,6 +254,7 @@ export class AgentsView {
       const o = i * FRAME_STRIDE;
       let x = frame[o], z = frame[o + 1], heading = frame[o + 2];
       const mode = frame[o + 3], profile = frame[o + 4], id = frame[o + 5];
+      if ((mode === 7 || mode === 3) && this.carMask?.(x, z)) continue;
       if (mode === 7) {
         // bus : « profil » = ligne ; trois fois plus long qu'une voiture, on le grossit moins de loin
         const s = Math.min(zoom * 0.35, 3.5);

@@ -43,6 +43,7 @@ export class World {
   private shakeLevel = 0;
   private nextLightning = 0;
   private bolt?: THREE.Line;
+  private shadowRadius = SHADOW_RADIUS;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
@@ -275,6 +276,20 @@ export class World {
     waterMaterial.color.set("#1d4166").lerp(new THREE.Color("#0f2540"), this.night);
   }
 
+  /** Ombres resserrées autour de la cible quand on zoome (nettes en gros plan), par paliers pour éviter le scintillement. */
+  private fitShadows() {
+    const d = this.camera.position.distanceTo(this.controls.target);
+    const r = Math.min(SHADOW_RADIUS, Math.max(24, 2 ** Math.ceil(Math.log2(d * 2.5))));
+    if (r === this.shadowRadius) return;
+    this.shadowRadius = r;
+    const sc = this.sun.shadow.camera;
+    sc.left = sc.bottom = -r;
+    sc.right = sc.top = r;
+    sc.updateProjectionMatrix();
+    this.sun.shadow.normalBias = Math.max(0.02, (0.6 * r) / SHADOW_RADIUS);
+    this.sun.shadow.bias = r < 200 ? -0.0001 : -0.0004;
+  }
+
   render(dt: number) {
     if (this.flyTo) {
       // déplace cible et caméra ensemble pour garder l'angle de vue
@@ -285,6 +300,7 @@ export class World {
     this.updatePrecip(dt);
     this.updateEffects(dt);
     this.controls.update();
+    this.fitShadows();
     // la secousse est appliquée juste pour le rendu, puis annulée
     const shake = new THREE.Vector3(
       (Math.random() - 0.5) * this.shakeLevel * 6, (Math.random() - 0.5) * this.shakeLevel * 4, (Math.random() - 0.5) * this.shakeLevel * 6,
