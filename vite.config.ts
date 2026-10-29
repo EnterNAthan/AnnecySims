@@ -1,7 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { defineConfig, type Plugin } from "vite";
 import { readFileSync } from "node:fs";
-import { analyze, cohortResponses, finalReport, interpret } from "./server/interpret";
+import { analyze, cohortResponses, finalReport, interpret, warm } from "./server/interpret";
 import { assetFile } from "./server/assets";
 
 type Handler = (body: any) => Promise<unknown>;
@@ -10,6 +10,7 @@ type Handler = (body: any) => Promise<unknown>;
 function aiApi(): Plugin {
   const routes: Record<string, Handler> = {
     "/api/interpret": (b) => interpret(String(b.text).slice(0, 600), b.context, !!b.extreme),
+    "/api/warm": (b) => warm((b.texts as unknown[]).map(String).slice(0, 12), b.context, !!b.extreme),
     "/api/cohorts": (b) => cohortResponses(b.event, b.cohorts),
     "/api/analyze": (b) => analyze(b.event, b.before, b.after, b.cohorts, b.responses),
     "/api/bilan": (b) => finalReport(b.event, b.bilan),

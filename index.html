@@ -27,25 +27,29 @@
       </div>
     </header>
     <div id="settings">
-      <button id="history-open" title="Historique des événements et bilans">📚</button>
+      <button id="history-open" title="Historique des événements et bilans">📚 Historique</button>
       <button id="traffic" title="Fluidité de chaque rue, du vert au rouge">Trafic</button>
-      <button id="bus-lines" title="Lignes de bus Sibra et arrêts">🚌</button>
-      <label title="Noms des lieux"><input id="labels" type="checkbox" checked /> Lieux</label>
-      <label title="Taille des habitants">Taille <input id="agentSize" type="range" min="1" max="4" step="0.5" value="2" /></label>
-      <div class="seg" id="viewStyle" title="Style de la vue 3D"></div>
+      <button id="bus-lines" title="Lignes de bus Sibra, arrêts et remplissage des parkings">🚌</button>
+      <button id="display-open" title="Affichage">⚙</button>
       <button id="zen" title="Masquer l'interface (H)">◐</button>
+      <div id="display-menu" class="hidden">
+        <label title="Noms des lieux"><input id="labels" type="checkbox" checked /> Noms des lieux</label>
+        <label><input id="show-feed" type="checkbox" checked /> Voix de la ville</label>
+        <label><input id="show-counts" type="checkbox" /> Compteurs en direct</label>
+        <label title="Taille des habitants">Taille des habitants <input id="agentSize" type="range" min="1" max="4" step="0.5" value="2" /></label>
+        <div class="seg" id="viewStyle" title="Style de la vue 3D"></div>
+      </div>
     </div>
-    <aside id="live" class="panel">
+    <div id="ff" class="hidden"></div>
+    <div id="toast" class="hidden"></div>
+    <aside id="live" class="panel hidden">
       <div class="panel-title">En ce moment</div>
       <div id="counts"></div>
       <div id="legend"></div>
     </aside>
     <aside id="today" class="panel"></aside>
-    <div id="right">
-      <aside id="decisions" class="panel hidden"></aside>
-      <aside id="agent" class="panel hidden"></aside>
-      <aside id="report" class="panel hidden"></aside>
-    </div>
+    <aside id="decisions" class="panel hidden"></aside>
+    <aside id="agent" class="panel hidden"></aside>
     <aside id="feed" class="panel"><div class="panel-title">Voix de la ville</div></aside>
     <div id="command">
       <div id="proposal" class="hidden"></div>

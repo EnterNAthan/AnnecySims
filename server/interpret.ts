@@ -1,6 +1,6 @@
 // Endpoints IA : interprétation des commandes, réactions des groupes d'habitants, analyse d'impact.
 // Claude est appelé via Claude Code (`claude -p`) ; sans lui, on retombe sur des règles.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { z } from "zod";
 import { EFFECTS, EVENT_KINDS, EVENT_SPECS, MOTIONS, NATURES, PLACEMENTS, PROPS, PROP_LABEL, SHAPES, type EventProposal } from "../src/shared/catalog";
 import { assetCatalog, findAsset } from "./assets";
@@ -130,7 +130,60 @@ function resolveNames(p: EventProposal): EventProposal {
   };
 }
 
-export async function interpret(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
+// Cache disque des interprétations de Claude : une demande déjà vue (suggestions, démo) répond instantanément.
+const CACHE_FILE = "data/interpret-cache.json";
+/** proposition, et heure de la simulation (minutes) au moment où Claude l'a interprétée */
+type Cached = { p: EventProposal; at: number };
+let cache: Record<string, Cached> | null = null;
+const loadCache = () => (cache ??= existsSync(CACHE_FILE) ? JSON.parse(readFileSync(CACHE_FILE, "utf8")) : {});
+const cacheKey = (text: string, extreme: boolean) => `${extreme ? "x" : "n"}:${text.trim().toLowerCase().replace(/\s+/g, " ")}`;
+const minutes = (hhmm: string) => {
+  const m = /^(\d{1,2}):(\d{2})/.exec(hhmm);
+  return m ? Number(m[1]) * 60 + Number(m[2]) : null;
+};
+const hhmm = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+/** interprétations en cours : une même demande n'appelle Claude qu'une fois */
+const inflight = new Map<string, Promise<EventProposal | { error: string }>>();
+
+/** Une heure de début déjà passée garde le même délai qu'à l'interprétation (« dans une heure »). */
+function replay({ p, at }: Cached, time: string): EventProposal {
+  const now = minutes(time), start = minutes(p.startTime);
+  if (now === null || start === null || p.dayOffset > 0 || start > now) return { ...p, cached: true };
+  const shifted = Math.min(23 * 60 + 50, now + Math.max(0, start - at));
+  return { ...p, startTime: hhmm(shifted), cached: true };
+}
+
+export function interpret(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
+  const key = cacheKey(text, extreme);
+  const hit = loadCache()[key];
+  if (hit?.p) return Promise.resolve(replay(hit, context.time));
+  let job = inflight.get(key);
+  if (!job) {
+    job = interpretWithClaude(text, context, extreme).then((out) => {
+      if (!("error" in out) && out.source === "claude") {
+        loadCache()[key] = { p: out, at: minutes(context.time) ?? 0 };
+        try {
+          writeFileSync(CACHE_FILE, JSON.stringify(cache));
+        } catch {
+          /* cache facultatif */
+        }
+      }
+      return out;
+    }).finally(() => inflight.delete(key));
+    inflight.set(key, job);
+  }
+  return job;
+}
+
+/** Préchauffe le cache avec les suggestions, une à la fois pour laisser la place aux demandes du joueur. */
+let warming = Promise.resolve();
+export function warm(texts: string[], context: { time: string; weather: string }, extreme: boolean) {
+  const todo = texts.filter((t) => !loadCache()[cacheKey(t, extreme)]);
+  for (const t of todo) warming = warming.then(() => interpret(t, context, extreme)).then(() => {}, () => {});
+  return Promise.resolve({ queued: todo.length });
+}
+
+async function interpretWithClaude(text: string, context: { time: string; weather: string }, extreme: boolean): Promise<EventProposal | { error: string }> {
   try {
     const out = await askClaude(interpretSystem(extreme), `Heure actuelle : ${context.time}. Météo : ${context.weather}.\nDemande : « ${text} »`, proposalSchema(extreme));
     if (!out.understood) return { error: out.note || "Ça ne ressemble pas à un événement pour la ville." };

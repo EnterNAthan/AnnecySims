@@ -338,6 +338,8 @@ export interface EventProposal {
   /** objets de la banque de modèles à montrer sur place */
   assets: AssetPlacement[];
   source: "claude" | "local";
+  /** réponse servie depuis le cache du serveur (demande déjà interprétée) */
+  cached?: boolean;
 }
 
 /** Comportement résolu d'un événement : celui du type, ajusté par les paramètres de la proposition. */

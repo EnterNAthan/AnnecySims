@@ -4,3 +4,4 @@ data/osm-raw.json
 .env
 data/asset-cache/
 data/transit-raw.json
+data/interpret-cache.json

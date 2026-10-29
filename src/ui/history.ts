@@ -48,6 +48,13 @@ export class HistoryPanel {
     this.refresh();
   }
 
+  /** Ouvre l'historique sur le bilan d'une journée. */
+  openDay(day: number) {
+    this.tab = "days";
+    this.selection = { type: "day", day };
+    this.toggle(true);
+  }
+
   private toggle(open: boolean) {
     this.el.classList.toggle("hidden", !open);
     if (open) this.render();
