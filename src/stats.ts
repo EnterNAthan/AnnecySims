@@ -4,7 +4,7 @@ import { setupAiConfig } from "./ui/aiConfig";
 
 setupAiConfig();
 
-interface Snapshot { since: number; model: string; active: number; total: number; failures: number; errors502: number; successes: number; averageMs: number; calls: ModelCall[] }
+interface Snapshot { since: number; model: string; active: number; total: number; failures: number; errors502: number; successes: number; averageMs: number; decisions: number; decisionsPerMinute: number; calls: ModelCall[] }
 const get = <T extends HTMLElement>(id: string) => document.getElementById(id) as T;
 const filter = get<HTMLSelectElement>("filter"), search = get<HTMLInputElement>("search");
 let snapshot: Snapshot | undefined;
@@ -17,9 +17,10 @@ function render() {
   get("model").textContent = s.model;
   const metrics = [["Appels terminés", s.total], ["En cours", s.active], ["Réussite", `${s.total ? Math.round(s.successes / s.total * 100) : 0} %`], ["Erreurs", s.failures], ["HTTP 502", s.errors502], ["Durée moyenne", `${(s.averageMs / 1000).toFixed(1)} s`]];
   get("metrics").innerHTML = metrics.map(([label, value]) => `<div><span>${label}</span><strong>${value}</strong></div>`).join("");
+  get("metrics").insertAdjacentHTML("beforeend", `<div><span>Décisions valides du modèle</span><strong>${s.decisions ?? 0}</strong></div><div><span>Décisions / minute</span><strong>${(s.decisionsPerMinute ?? 0).toFixed(1)}</strong></div>`);
   const calls = s.calls.filter((call) => {
-    const result = call.result as { action?: string } | undefined;
-    return (filter.value === "all" || filter.value === "errors" && call.status >= 400 || filter.value === "502" && call.status === 502 || filter.value === "talk" && result?.action === "talk") && JSON.stringify(call).toLocaleLowerCase().includes(search.value.toLocaleLowerCase());
+    const result = call.result as { action?: string; decisions?: { action: string }[] } | undefined;
+    return (filter.value === "all" || filter.value === "errors" && call.status >= 400 || filter.value === "502" && call.status === 502 || filter.value === "talk" && (result?.action === "talk" || result?.decisions?.some((d) => d.action === "talk"))) && JSON.stringify(call).toLocaleLowerCase().includes(search.value.toLocaleLowerCase());
   });
   get("summary").textContent = `${calls.length} entrées affichées sur les ${s.calls.length} dernières conservées · Compteurs depuis ${new Date(s.since).toLocaleString("fr-FR")} · Remis à zéro au redémarrage du serveur`;
   get("calls").innerHTML = calls.length ? calls.map((call) => {
@@ -28,6 +29,22 @@ function render() {
   }).join("") : `<p class="empty">${s.total ? "Aucun appel ne correspond aux filtres." : "Aucun appel enregistré. Ouvre la ville dans un autre onglet et lance la simulation."}</p>`;
   get("calls").querySelectorAll<HTMLDetailsElement>("details").forEach((detail) => {
     const call = calls.find((entry) => entry.id === Number(detail.dataset.id));
+    if (call?.metrics) {
+      const metrics = document.createElement("p");
+      metrics.className = "action";
+      metrics.textContent = `Entrée : ${call.metrics.inputChars} caractères · En-têtes : ${call.metrics.headersMs === undefined ? "—" : `${(call.metrics.headersMs / 1000).toFixed(1)} s`} · Tokens entrée/sortie : ${call.metrics.promptTokens ?? "—"}/${call.metrics.completionTokens ?? "—"} · Raisonnement : ${call.metrics.reasoningTokens ?? "—"}`;
+      detail.before(metrics);
+    }
+    const batch = call?.result as { decisions?: { agentId: number; thought: string; action: string; message?: string; targetId?: number }[] } | undefined;
+    if (batch?.decisions) {
+      const preview = document.createElement("div");
+      for (const decision of batch.decisions) {
+        const text = document.createElement("p");
+        text.textContent = `Personne #${decision.agentId} · ${decision.action}\n${decision.thought}${decision.message ? `\nÀ #${decision.targetId ?? "?"} : ${decision.message}` : ""}`;
+        preview.append(text);
+      }
+      detail.before(preview);
+    }
     const result = call?.result as { goal?: string; plan?: string[] } | undefined;
     if (result?.goal || result?.plan?.length) {
       const plan = document.createElement("p");

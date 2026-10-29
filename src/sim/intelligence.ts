@@ -1,9 +1,10 @@
 import type { Engine } from "./engine";
 import type { Agent } from "./population";
 import { insertOuting } from "./planner";
-import { DecisionSchema } from "../shared/intelligence";
+import { DecisionSchema, validateBatch, type Decision } from "../shared/intelligence";
 import type { AiLog } from "../shared/intelligence";
 import { DEFAULT_AI_CONFIG, type AiConfig } from "../shared/aiConfig";
+import { buildAiContext } from "./aiContext";
 
 interface Mind {
   memories: string[];
@@ -22,7 +23,38 @@ export class Intelligence {
   private active = 0;
   private cursor = 0;
   private nextDispatch = 0;
+  private inFlightRequests = 0;
+  private failedRequests = 0;
+  private cooldownUntil = 0;
   private config = { ...DEFAULT_AI_CONFIG };
+  private pending: { id: number; context: string; resolve: (value: Decision) => void; reject: (error: unknown) => void }[] = [];
+
+  private requestDecision(id: number, context: string): Promise<Decision> {
+    return new Promise((resolve, reject) => {
+      this.pending.push({ id, context, resolve, reject });
+      if (this.pending.length === 1) queueMicrotask(() => void this.flush());
+    });
+  }
+
+  private async flush() {
+    const entries = this.pending.splice(0);
+    this.inFlightRequests++;
+    try {
+      const body = entries.length === 1 ? { context: entries[0].context } : { contexts: entries.map((entry) => ({ agentId: entry.id, context: entry.context })) };
+      const response = await fetch("/api/agents/decide", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), signal: AbortSignal.timeout(95000) });
+      if (!response.ok) {
+        const detail = await response.json().catch(() => ({}));
+        throw new Error(`IA HTTP ${response.status} : ${detail.error ?? "Erreur sans détail"}`);
+      }
+      const raw = await response.json();
+      const decisions = entries.length === 1 ? [{ ...DecisionSchema.parse(raw), agentId: entries[0].id }] : validateBatch(raw, entries.map((entry) => entry.id)).decisions;
+      this.failedRequests = 0;
+      for (const entry of entries) entry.resolve(decisions.find((d) => d.agentId === entry.id)!);
+    } catch (error) {
+      if (++this.failedRequests >= 3) this.cooldownUntil = this.now() + 30000;
+      for (const entry of entries) entry.reject(error);
+    } finally { this.inFlightRequests--; }
+  }
 
   configure(config: AiConfig) {
     const oldInterval = this.config.intervalSeconds * 1000;
@@ -65,14 +97,15 @@ export class Intelligence {
   tick() {
     const agents = this.engine.agents;
     const now = this.now();
-    if (!this.config.enabled || !agents.length || now < this.nextDispatch) return;
-    for (let n = 0; n < agents.length && this.active < this.config.concurrency; n++) {
+    if (!this.config.enabled || !agents.length || now < this.nextDispatch || now < this.cooldownUntil || this.inFlightRequests >= this.config.concurrency) return;
+    let dispatched = 0;
+    for (let n = 0; n < agents.length; n++) {
       const a = agents[this.cursor++ % agents.length];
       const mind = this.mind(a);
       if (!mind.busy && now >= mind.next) {
-        this.nextDispatch = now + Math.max(1000 / this.config.requestsPerSecond, this.config.intervalSeconds * 1000 / agents.length);
+        this.nextDispatch = now + Math.max(1000 / this.config.requestsPerSecond, this.config.intervalSeconds * 1000 * this.config.batchSize / agents.length);
         void this.reflect(a);
-        break;
+        if (++dispatched >= this.config.batchSize) break;
       }
     }
   }
@@ -89,34 +122,18 @@ export class Intelligence {
     this.active++;
     const started = performance.now();
     const scheduled = this.now();
-    this.log(a, "request", "Demande de décision envoyée à DeepSeek");
+    this.log(a, "request", "Demande de décision IA envoyée");
     const day = this.engine.day;
     const minute = this.engine.minute;
     const revision = mind.revision;
     const candidates = ["park", "lake", "food", "grocery", "culture", "sport"] as const;
-    const places = candidates.flatMap((kind) => [...this.engine.places.list(kind)]
-      .sort((p, q) => Math.hypot(p.x - a.x, p.z - a.z) - Math.hypot(q.x - a.x, q.z - a.z)).slice(0, 5));
-    const nearby = this.nearby(a).slice(0, 8);
+    const canVisit = !a.trip && a.age >= 18 && !a.household.members.some((m) => m.age < 12) && a.plan[a.step]?.place === a.home;
+    const places = canVisit ? candidates.flatMap((kind) => [...this.engine.places.list(kind)]
+      .sort((p, q) => Math.hypot(p.x - a.x, p.z - a.z) - Math.hypot(q.x - a.x, q.z - a.z)).slice(0, 2)) : [];
+    const nearby = this.nearby(a).slice(0, 5);
     try {
-      const context = JSON.stringify({
-        day, minute, person: this.engine.inspect(a.id),
-        personality: ["sociable", "réservée", "curieuse", "pragmatique"][a.id % 4],
-        memories: mind.memories,
-        goal: mind.goal, remainingPlan: mind.plan,
-        instruction: "Réévalue ton plan à partir des résultats mémorisés. Exécute une seule prochaine action concrète, puis propose les étapes suivantes. Une parole reçue mérite une réponse pertinente. Ne répète pas les mêmes paroles ou une sortie déjà planifiée.",
-        constraints: { travelling: !!a.trip, youngChildren: a.household.members.some((m) => m.age < 12), visitOnlyDuringFreeTimeAtHome: true },
-        nearby: nearby.map((b) => ({ id: b.id, name: b.name })),
-        destinations: places.map((p) => ({ id: p.id, kind: p.kind, name: p.name })),
-      });
-      const response = await fetch("/api/agents/decide", {
-        method: "POST", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ context }), signal: AbortSignal.timeout(95000),
-      });
-      if (!response.ok) {
-        const detail = await response.json().catch(() => ({}));
-        throw new Error(`IA HTTP ${response.status} : ${detail.error ?? "Erreur sans détail"}`);
-      }
-      const decision = DecisionSchema.parse(await response.json());
+      const context = buildAiContext(this.engine, a, mind, nearby, places);
+      const decision = await this.requestDecision(a.id, context);
       mind.failures = 0;
       if (day !== this.engine.day || this.engine.minute - minute > 15) {
         mind.status = "Situation modifiée, nouvelle décision nécessaire";

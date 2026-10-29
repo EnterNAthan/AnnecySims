@@ -10,6 +10,7 @@ const engine = new Engine(JSON.parse(readFileSync("public/city.json", "utf8")), 
 assert.equal(engine.agents.length, 100);
 let now = 0;
 const ai = new Intelligence(engine, undefined, () => now);
+ai.configure({ ...DEFAULT_AI_CONFIG, batchSize: 1, requestsPerSecond: 1, intervalSeconds: 30 });
 let calls = 0;
 let continuedPlan = false;
 globalThis.fetch = async (_url, options) => {
@@ -20,6 +21,7 @@ globalThis.fetch = async (_url, options) => {
   return Response.json({ thought: "Je prends des nouvelles.", goal: "Retrouver mes proches", plan: ["Discuter", "Proposer une rencontre"], action: target ? "talk" : "continue", targetId: target?.id, message: "Bonjour !" });
 };
 ai.tick();
+await Promise.resolve();
 assert.equal(calls, 1, "Un seul appel doit démarrer à la fois pour lisser le débit");
 ai.tick();
 assert.equal(calls, 1, "Aucun pic de requêtes sur le même tick");
@@ -42,6 +44,7 @@ now += 60000;
 ai.tick();
 assert.equal(calls, beforePause, "La suspension doit arrêter les nouveaux appels");
 ai.configure({ ...DEFAULT_AI_CONFIG, enabled: true, memoryLimit: 4 });
+now += 10000;
 ai.tick();
 await new Promise((resolve) => setTimeout(resolve, 20));
 assert.ok(calls > beforePause, "La reprise doit relancer les décisions");

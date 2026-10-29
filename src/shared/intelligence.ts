@@ -14,6 +14,15 @@ export const AI_CONCURRENCY = 4;
 export const AI_INTERVAL_MS = 30000;
 export const AI_MIN_DISPATCH_MS = 1000;
 export type Decision = z.infer<typeof DecisionSchema>;
+export const BatchDecisionSchema = z.object({ decisions: z.array(DecisionSchema.extend({ agentId: z.number().int().nonnegative() })).min(1).max(5) });
+
+export function validateBatch(value: unknown, ids: number[]) {
+  const batch = BatchDecisionSchema.parse(value);
+  if (batch.decisions.length !== ids.length || new Set(batch.decisions.map((d) => d.agentId)).size !== ids.length || batch.decisions.some((d) => !ids.includes(d.agentId))) {
+    throw new Error("Lot invalide : il faut exactement une décision par habitant demandé");
+  }
+  return batch;
+}
 
 export interface AiLog {
   kind: "request" | "decision" | "conversation" | "error" | "ignored";

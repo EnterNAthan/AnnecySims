@@ -2,3 +2,4 @@ node_modules
 dist
 data/osm-raw.json
 .env
+benchmarks/results/

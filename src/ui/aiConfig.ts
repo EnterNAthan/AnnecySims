@@ -6,6 +6,7 @@ export function setupAiConfig() {
   const status = document.querySelector<HTMLElement>("#config-status")!;
   const rows: [keyof AiConfig, string, string, string, number?, number?, number?][] = [
     ["enabled", "Intelligence active", "checkbox", "Suspend ou reprend les nouvelles décisions."],
+    ["batchSize", "Personnes par appel", "number", "1 pour comparer, 5 pour tester les décisions groupées. Une mémoire distincte par personne.", 1, 5, 4],
     ["concurrency", "Appels simultanés", "number", "Maximum de requêtes en cours par ville et sur le serveur.", 1, 100, 1],
     ["intervalSeconds", "Intervalle par personne (s)", "number", "Délai minimum entre deux décisions d’un habitant.", 1, 600, 1],
     ["requestsPerSecond", "Départs maximum / seconde", "number", "Lisse les appels de chaque ville selon sa population.", 0.1, 100, 0.1],
@@ -13,6 +14,7 @@ export function setupAiConfig() {
     ["maxTokens", "Budget de génération", "number", "Limite de tokens de la réponse, raisonnement du modèle compris.", 256, 16000, 1],
     ["timeoutSeconds", "Délai maximal (s)", "number", "Temps maximal d’attente d’une réponse Arkane.", 5, 90, 1],
     ["temperature", "Température", "number", "Variation des réponses : faible pour la stabilité, élevée pour la diversité.", 0, 2, 0.1],
+    ["reasoningEffort", "Raisonnement", "text", "none : désactivé, recommandé pour Qwen. provider : laisser le fournisseur choisir. Valeurs acceptées : none ou provider."],
     ["model", "Identifiant du modèle", "text", "Identifiant exact disponible chez Arkane. La clé et l’URL restent côté serveur."],
   ];
   for (const [key, label, type, help, min, max, step] of rows) {

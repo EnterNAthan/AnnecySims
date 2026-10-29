@@ -2,6 +2,7 @@ import { z } from "zod";
 
 export const AiConfigSchema = z.object({
   enabled: z.boolean(),
+  batchSize: z.union([z.literal(1), z.literal(5)]).default(5),
   concurrency: z.number().int().min(1).max(100),
   intervalSeconds: z.number().min(1).max(600),
   requestsPerSecond: z.number().min(0.1).max(100),
@@ -9,11 +10,12 @@ export const AiConfigSchema = z.object({
   maxTokens: z.number().int().min(256).max(16000),
   timeoutSeconds: z.number().int().min(5).max(90),
   temperature: z.number().min(0).max(2),
+  reasoningEffort: z.enum(["none", "provider"]).default("none"),
   model: z.string().trim().min(1).max(200),
 }).strict();
 export type AiConfig = z.infer<typeof AiConfigSchema>;
 export const DEFAULT_AI_CONFIG: AiConfig = {
-  enabled: true, concurrency: 4, intervalSeconds: 30, requestsPerSecond: 1,
-  memoryLimit: 48, maxTokens: 4000, timeoutSeconds: 90, temperature: 0.7,
-  model: "deepseek-ai/DeepSeek-V4.1-Flash",
+  enabled: true, batchSize: 5, concurrency: 1, intervalSeconds: 60, requestsPerSecond: 0.2,
+  memoryLimit: 16, maxTokens: 3000, timeoutSeconds: 60, temperature: 0.3, reasoningEffort: "none",
+  model: "qwen38-27b-turbo-v2",
 };

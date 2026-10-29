@@ -22,7 +22,7 @@ const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ "&": "&a
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 100);
+  const residents = Number(params.get("pop") ?? 50);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
   const tourists = 0;
   const commuters = 0;

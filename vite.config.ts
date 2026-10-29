@@ -1,6 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { interpret } from "./server/interpret";
-import { decide } from "./server/intelligence";
+import { decide, type RequestMetrics } from "./server/intelligence";
 import { createModelStats } from "./server/modelStats";
 import { AiConfigSchema, DEFAULT_AI_CONFIG } from "./src/shared/aiConfig";
 
@@ -41,7 +41,7 @@ export default defineConfig(({ mode }) => {
     configureServer(server) {
       let active = 0;
       const stats = createModelStats();
-      let config = { ...DEFAULT_AI_CONFIG, model: env.ARKANE_MODEL || DEFAULT_AI_CONFIG.model };
+      let config = { ...DEFAULT_AI_CONFIG };
       server.middlewares.use("/api/ai-config", (req, res) => {
         res.setHeader("Content-Type", "application/json");
         res.setHeader("Cache-Control", "no-store");
@@ -76,23 +76,24 @@ export default defineConfig(({ mode }) => {
         }
         active++;
         let body = "";
-        req.on("data", (chunk) => { body += chunk; if (body.length > 40000) req.destroy(); });
+        req.on("data", (chunk) => { body += chunk; if (body.length > 180000) req.destroy(); });
         let released = false;
         const release = () => { if (!released) { released = true; active--; } };
         req.on("aborted", release);
         req.on("end", async () => {
           const at = Date.now();
           let agent = "Non identifié";
+          let metrics: RequestMetrics | undefined;
           try {
             const input = JSON.parse(body);
-            try { agent = String(JSON.parse(input.context).person?.name ?? agent); } catch { /* contexte invalide : validation dans decide */ }
-            const result = await decide(input, env, settings);
-            stats.record({ at, agent, model, status: 200, duration: Date.now() - at, result });
+            try { agent = input.contexts ? input.contexts.map((entry: { context: string }) => JSON.parse(entry.context).person?.name ?? "?").join(", ") : String(JSON.parse(input.context).person?.name ?? agent); } catch { /* validation dans decide */ }
+            const result = await decide(input, env, settings, (value) => { metrics = value; });
+            stats.record({ at, agent, model, status: 200, duration: Date.now() - at, result, metrics });
             res.end(JSON.stringify(result));
           }
           catch (error) {
             const message = error instanceof Error ? error.message : "Erreur IA";
-            stats.record({ at, agent, model, status: 502, duration: Date.now() - at, error: message });
+            stats.record({ at, agent, model, status: 502, duration: Date.now() - at, error: message, metrics });
             res.statusCode = 502;
             res.end(JSON.stringify({ error: message }));
           }
