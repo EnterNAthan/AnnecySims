@@ -603,7 +603,29 @@ interface Car {
   marc: boolean;
   minGap: number;
   braking: boolean;
+  /** temps passé à l'arrêt ou au pas (s) */
+  waited: number;
 }
+
+/** Chiffres du bouchon, pour le compte rendu. */
+export interface JamStats {
+  active: boolean;
+  blocked: number;
+  passed: number;
+  /** longueur de la file (m) */
+  length: number;
+  /** attente moyenne et attente de Marc (min) */
+  avgWait: number;
+  marcWait: number;
+  marcPassed: boolean;
+  /** CO₂ rejeté au ralenti (kg) */
+  co2: number;
+}
+
+/** l'accident a eu lieu à 7 h 41 : la tête de file attend déjà depuis 17 min au lever de rideau */
+const WAIT_AT_START = 17 * 60;
+/** consommation au ralenti : ~0,6 L/h, soit ~1,4 kg de CO₂ par heure */
+const IDLE_CO2_PER_S = 1.4 / 3600;
 
 interface Fleet {
   spec: CarSpec;
@@ -718,7 +740,7 @@ export class MarcStory {
       const len = marc ? SPECS.hatch.L : types[type].L;
       const c: Car = {
         s: front - len / 2, v: 0, len, type, color: new THREE.Color(palette[Math.floor(rand() * palette.length)]),
-        released: false, gone: false, marc, minGap: marc ? 4.4 : 1.6 + rand() * 0.9, braking: true,
+        released: false, gone: false, marc, minGap: marc ? 4.4 : 1.6 + rand() * 0.9, braking: true, waited: 0,
       };
       this.cars.push(c);
       front = c.s - len / 2 - gap;
@@ -727,6 +749,8 @@ export class MarcStory {
     for (let i = 0; i < CARS_AHEAD; i++) add(pickType(), i === CARS_AHEAD - 1 ? 4.4 : 1.4 + rand() * 1.2);
     this.marc = add(0, 1.5 + rand(), true);
     for (let i = 0; i < CARS_BEHIND && front > 6; i++) add(pickType(), 1.4 + rand() * 1.2);
+    // les premiers arrivés attendent depuis le plus longtemps
+    this.cars.forEach((c, i) => (c.waited = 60 + (WAIT_AT_START - 60) * (1 - i / this.cars.length)));
 
     // couloir où les voitures simulées sont masquées
     const back = this.cars[this.cars.length - 1].s - 15;
@@ -1213,6 +1237,27 @@ export class MarcStory {
     return false;
   }
 
+  /** Étiquette de l'accident (cliquable pour le compte rendu). */
+  get accidentElement() {
+    return this.accidentLabel.element;
+  }
+
+  stats(): JamStats {
+    const live = this.cars.filter((c) => !c.gone);
+    const waiting = live.filter((c) => !c.released);
+    const last = waiting[waiting.length - 1];
+    return {
+      active: this.accidentActive,
+      blocked: waiting.length,
+      passed: this.cars.length - waiting.length,
+      length: last ? Math.max(0, GATE_S - (last.s - last.len / 2)) : 0,
+      avgWait: this.cars.reduce((n, c) => n + c.waited, 0) / this.cars.length / 60,
+      marcWait: this.marc.waited / 60,
+      marcPassed: this.marc.released && this.marc.s > GATE_S,
+      co2: this.cars.reduce((n, c) => n + c.waited, 0) * IDLE_CO2_PER_S,
+    };
+  }
+
   private latAt = (s: number) => {
     if (!this.accidentActive) return LANE;
     // contournement par la voie d'en face, au pas, sous les ordres de l'agent
@@ -1279,6 +1324,7 @@ export class MarcStory {
       c.v = Math.max(0, c.v);
       c.s = Math.min(c.s + c.v * dt, limit - c.len / 2);
       c.braking = c.v < 0.4 || target < c.v - 0.2;
+      if (c.v < 2 && (!c.released || c.s < GATE_S + 20)) c.waited += dt;
       if (!c.marc && c.s > GATE_S + VANISH_AFTER) c.gone = true;
       leaderBack = c.s - c.len / 2;
       if (c.marc) this.wheelTurn += (c.v * dt) / SPECS.hatch.wheelR;

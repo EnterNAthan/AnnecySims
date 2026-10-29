@@ -15,7 +15,7 @@ import { DecisionsPanel } from "./ui/decisions";
 import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { TransitView } from "./render/transit";
-import { MarcStory } from "./render/marc";
+import { MarcStory, type JamStats } from "./render/marc";
 import type { Transit } from "./shared/city";
 import { SimClock } from "./sim/clock";
 import { streetNames } from "./shared/streets";
@@ -291,6 +291,28 @@ async function main() {
     world.camera.position.set(ev.x - 260, 230, ev.z + 300);
   }
   const history = new HistoryPanel(decisions, dayReportHtml);
+
+  // un clic sur l'étiquette d'un événement de la carte ouvre son compte rendu
+  const openJam = () => {
+    decisions.showCustom(MARC_JAM_SID, {
+      kind: "accident", title: "Accident avenue d'Albigny", description: "Accrochage entre deux voitures, voie de droite bloquée.",
+      location: "Avenue d'Albigny", streets: ["Avenue d'Albigny"], route: [], days: 1, when: "aujourd'hui depuis 7h41",
+    }, clock.day, { day: clock.day, start: 7 * 60 + 41, end: 10 * 60, lastDay: clock.day }, () => jamReportHtml(marc.stats()));
+  };
+  marc.accidentElement.dataset.sid = String(MARC_JAM_SID);
+  document.addEventListener("click", (e) => {
+    const label = (e.target as HTMLElement).closest<HTMLElement>(".labels .event-label[data-sid]");
+    if (!label) return;
+    const sid = Number(label.dataset.sid);
+    if (sid === MARC_JAM_SID) openJam();
+    else if (decisions.has(sid)) decisions.focus(sid);
+    else {
+      const ev = currentPlan?.events.find((x) => x.sid === sid);
+      if (ev) lookAt(ev.x, ev.z);
+    }
+  });
+  // chiffres du bouchon en direct
+  setInterval(() => decisions.focusedSid === MARC_JAM_SID && decisions.refresh(), 1000);
   // la carte des événements du jour ouvre le compte rendu d'une décision
   const openEvent = (sid: number | undefined, x: number, z: number) => {
     if (sid !== undefined && decisions.all().some((d) => d.sid === sid && !d.auto)) decisions.focus(sid);
@@ -485,6 +507,33 @@ function setupViewStyle(world: World, meshes: THREE.Object3D[], forced: string |
   el.querySelectorAll<HTMLButtonElement>("button").forEach((b) => (b.onclick = () => set(b.dataset.view as ViewStyle)));
   const initial = forced ?? saved;
   set(VIEW_STYLES.some((v) => v.id === initial) ? (initial as ViewStyle) : "verre");
+}
+
+/** identifiant réservé au bouchon de Marc (hors simulation) */
+const MARC_JAM_SID = -100;
+
+/** Compte rendu du bouchon de l'avenue d'Albigny, à partir de la file mise en scène. */
+function jamReportHtml(j: JamStats) {
+  const tile = (label: string, value: string, note: string, cls = "bad") => `<div class="tile ${cls}"><small>${label}</small><b>${value}</b><em>${note}</em></div>`;
+  const min = (m: number) => `${Math.round(m)} min`;
+  const hero = j.active
+    ? `<div class="f-hero bad"><span class="f-kicker">En direct</span><b>${fmt(j.blocked)} voitures bloquées sur ${fmt(j.length)} m, la police fait passer une voiture toutes les 3 secondes</b></div>`
+    : `<div class="f-hero good"><span class="f-kicker">Voie dégagée</span><b>La file s'est résorbée, la circulation reprend normalement</b></div>`;
+  return `${hero}
+    <div class="f-tiles">
+      ${tile("Voitures dans la file", fmt(j.blocked), `${fmt(j.passed)} déjà passées`)}
+      ${tile("Longueur du bouchon", `${fmt(j.length)} m`, "jusqu'à l'accident")}
+      ${tile("Attente moyenne", min(j.avgWait), "par automobiliste")}
+      ${tile("CO₂ au ralenti", `${j.co2.toFixed(1)} kg`, "moteurs qui tournent pour rien")}
+    </div>
+    <section class="f-card">
+      <h4>🚗 Marc</h4>
+      <p>${j.marcPassed ? `Marc a passé l'accident après <b>${min(j.marcWait)}</b> d'attente.` : `Marc attend depuis <b>${min(j.marcWait)}</b>. Il ne peut rien y faire : la cause est 80 m devant lui.`}</p>
+    </section>
+    <section class="f-card">
+      <h4>💥 Ce qui s'est passé</h4>
+      <p>À 7 h 41, une voiture a percuté l'arrière d'un SUV à l'heure de pointe. La voie de droite est bloquée : police et pompiers sur place, circulation alternée par la voie d'en face.</p>
+    </section>`;
 }
 
 function renderLegend() {

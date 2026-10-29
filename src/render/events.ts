@@ -102,6 +102,8 @@ export class EventsView {
     const icon = ev.traits?.icon ?? EVENT_ICON[ev.kind];
     const el = document.createElement("div");
     el.className = ev.byPlayer ? "event-label player" : "event-label";
+    // un clic ouvre le compte rendu de l'événement
+    if (ev.sid !== undefined) el.dataset.sid = String(ev.sid);
     el.style.setProperty("--c", color);
     const when = ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`;
     el.innerHTML = `<span class="icon">${icon}</span><span><b>${ev.title}</b><small>${when}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small><small class="presence"></small></span>`;

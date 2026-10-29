@@ -41,6 +41,8 @@ export interface Decision {
   auto?: boolean;
   /** premier jour et horaires, pour le compte à rebours et l'avance rapide */
   schedule?: EventSchedule;
+  /** compte rendu fourni par la page (bouchon de Marc), redessiné à chaque rafraîchissement */
+  custom?: () => string;
 }
 
 /** Où en est une décision : programmée, en cours, terminée. */
@@ -72,6 +74,8 @@ export class DecisionsPanel {
     },
   ) {
     this.el.addEventListener("click", (e) => {
+      const ask = (e.target as HTMLElement).closest<HTMLElement>("[data-ask]");
+      if (ask) this.requestReport(Number(ask.dataset.ask));
       const t = (e.target as HTMLElement).closest<HTMLElement>("[data-act]");
       if (!t) return;
       const sid = Number(t.dataset.sid);
@@ -108,7 +112,7 @@ export class DecisionsPanel {
   /** Rapport complet d'une décision (pour l'historique). */
   detail(sid: number): string {
     const d = this.decisions.get(sid);
-    return d ? `<div class="f-report">${this.head(d, true)}${this.body(d)}</div>` : "";
+    return d ? `<div class="f-report">${this.head(d, true)}${d.custom ? d.custom() : this.body(d)}</div>` : "";
   }
 
   /** Ouvre (ou ferme avec -1) le compte rendu d'une décision. */
@@ -119,6 +123,23 @@ export class DecisionsPanel {
 
   get focusedSid() {
     return this.focused;
+  }
+
+  has(sid: number) {
+    return this.decisions.has(sid);
+  }
+
+  /** Compte rendu fourni par la page (hors simulation), ouvert aussitôt. */
+  showCustom(sid: number, event: EventSummary, day: number, schedule: EventSchedule, custom: () => string) {
+    if (!this.decisions.has(sid)) {
+      this.decisions.set(sid, { sid, day, event, cohorts: [], responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false, bilan: null, report: null, reporting: false, auto: true, schedule, custom });
+    }
+    this.focus(sid);
+  }
+
+  /** Redessine le compte rendu ouvert (chiffres en direct). */
+  refresh() {
+    if (this.focused !== -1) this.render();
   }
 
   /** Heure de la simulation : compte à rebours et phase (appelé régulièrement par la page). */
@@ -273,9 +294,9 @@ export class DecisionsPanel {
     this.el.innerHTML = `
       ${others.length ? `<div class="f-tabs">${others.map((x) => `<button data-act="tab" data-sid="${x.sid}">${x.event.traits?.icon ?? EVENT_SPECS[x.event.kind].icon} ${x.event.title}</button>`).join("")}</div>` : ""}
       ${this.head(d)}
-      ${this.steps(d)}
-      <div class="f-body">${this.body(d)}</div>
-      ${this.actions(d)}`;
+      ${d.custom ? "" : this.steps(d)}
+      <div class="f-body">${d.custom ? d.custom() : this.body(d)}</div>
+      ${d.custom ? "" : this.actions(d)}`;
     const nb = this.el.querySelector(".f-body");
     if (nb) nb.scrollTop = scroll;
     this.el.querySelectorAll<HTMLDetailsElement>("details[data-k]").forEach((x) => open.has(x.dataset.k) && (x.open = true));

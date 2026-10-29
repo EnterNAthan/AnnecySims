@@ -1441,3 +1441,19 @@ body.intro #layers {
   opacity: 0;
   pointer-events: none;
 }
+
+.labels .event-label[data-sid] {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.labels .event-label[data-sid]:hover {
+  filter: brightness(1.25);
+}
+
+/* un compte rendu ouvert reste visible en mode présentation */
+body.presenting.focusing #right,
+body.presenting.focusing #decisions {
+  opacity: 1;
+  pointer-events: auto;
+}
