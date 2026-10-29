@@ -98,6 +98,8 @@ async function main() {
     const t = e.target as HTMLElement;
     if (t.dataset.action === "close") select(-1);
     if (t.dataset.action === "follow") follow = true;
+    const member = t.closest<HTMLElement>(".household [data-id]");
+    if (member) select(Number(member.dataset.id));
   });
 
   // accès console pour le débogage : ?debug
@@ -197,7 +199,7 @@ async function main() {
     world.setTime(clock.date, clock.hour);
     $("#time").textContent = clock.label();
     const t = now / 1000;
-    if (frameCount) agents.update(frame, frameCount, world.camera, world.camera.position.distanceTo(world.controls.target), world.night, t);
+    if (frameCount) agents.update(frame, frameCount, world.camera.position.distanceTo(world.controls.target), world.night, t);
     events.update(clock.minute, t, world.night);
     preview.update(t);
     const active = events.activeKinds(clock.minute);
@@ -280,9 +282,11 @@ function renderAgent(a: AgentInfo, following: boolean) {
   el.innerHTML = `
     <div class="agent-head">
       <span class="dot" style="--c:${PROFILE_COLOR[a.profile]}"></span>
-      <div><h3>${a.name}</h3><small>${PROFILE_LABEL[a.profile]} · ${a.age} ans</small></div>
+      <div><h3>${a.name}</h3><small>${PROFILE_LABEL[a.profile]}</small><br><small>${a.sex === "F" ? "♀" : "♂"} · ${a.age} ans${a.csp ? ` · ${a.csp}` : ""}${a.partTime ? " · temps partiel" : ""}</small></div>
       <button data-action="close" title="Fermer">✕</button>
     </div>
+    <div class="muted small">Foyer : ${a.household.kind} · ${a.household.cars} voiture${a.household.cars > 1 ? "s" : ""} · ~${a.monthlyIncome.toLocaleString("fr-FR")} €/mois par UC</div>
+    ${a.household.members.length ? `<ul class="household">${a.household.members.map((m) => `<li data-id="${m.id}"><b>${m.name}</b> ${m.age} ans<span>${m.relation}</span></li>`).join("")}</ul>` : ""}
     <div class="now">${a.now}</div>
     <div class="mind"><span>${a.mind.icon}</span><em>« ${a.mind.text} »</em></div>
     ${bar("Énergie", a.needs.energy)}${bar("Vie sociale", a.needs.social)}${bar("Loisirs", a.needs.fun)}${bar("Satisfaction", a.satisfaction)}

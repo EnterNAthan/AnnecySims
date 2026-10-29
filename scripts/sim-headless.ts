@@ -12,6 +12,7 @@ let t = performance.now();
 const engine = new Engine(city, {
   residents, tourists: Math.round(residents * 0.04), commuters: Math.round(residents * 0.12), seed: 2026, startDate: new Date("2026-10-29"),
 });
+console.log(`${engine.households.length} foyers, taille moyenne ${(engine.agents.length / engine.households.length).toFixed(2)}`);
 console.log(`init ${(performance.now() - t).toFixed(0)} ms, ${engine.agents.length} agents`);
 console.log(Object.fromEntries([...engine.places.byKind].map(([k, v]) => [k, v.length])));
 
@@ -26,6 +27,9 @@ for (let d = 0; d < days; d++) {
   }
   const r = engine.endDay();
   console.log(`\njour ${r.day} (${r.date}) simulé en ${(performance.now() - t).toFixed(0)} ms — pic ${peak.n} en déplacement à ${(peak.minute / 60).toFixed(1)} h`);
+  const c = engine.commuteTrips, ct = Math.max(1, c.walk + c.bike + c.car);
+  const p = (n: number) => `${((100 * n) / ct).toFixed(1)} %`;
+  console.log(`domicile-travail (actifs résidents, cumulé) : voiture ${p(c.car)}, vélo ${p(c.bike)}, marche ${p(c.walk)} — INSEE ACT G2 : voiture 62,6 %, vélo 9,9 %, marche 9,8 %, transports en commun 11,7 % (non simulés : comparer les parts relatives hors TC)`);
   const { hourly, ...rest } = r;
   console.log(JSON.stringify(rest, null, 1));
 }

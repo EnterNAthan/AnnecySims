@@ -48,9 +48,9 @@ export function isAffected(a: Agent, zone: Zone): boolean {
 
 /**
  * Statistiques par groupe, triées par importance (taille × part concernée).
- * `modeOf` renvoie le mode habituel de l'habitant (mesuré sur sa dernière tournée).
+ * `affected` indique, par habitant, s'il est directement concerné par l'événement.
  */
-export function cohortStats(agents: Agent[], zone: Zone, scale: number, delayOf: (a: Agent) => number, max = 16): CohortStat[] {
+export function cohortStats(agents: Agent[], affected: Uint8Array, scale: number, delayOf: (a: Agent) => number, max = 16): CohortStat[] {
   const groups = new Map<string, Agent[]>();
   for (const a of agents) {
     const k = cohortId(a);
@@ -60,12 +60,14 @@ export function cohortStats(agents: Agent[], zone: Zone, scale: number, delayOf:
   }
   const stats: CohortStat[] = [];
   for (const [id, members] of groups) {
-    if (members.length < 20) continue;
     const n = members.length;
-    let affected = 0, car = 0, bike = 0, walk = 0, travel = 0, delay = 0, sat = 0;
+    let hit = 0;
+    for (const a of members) hit += affected[a.id];
+    // les petits groupes ne comptent que s'ils sont nettement touchés
+    if (n < 20 && hit < 8) continue;
+    let car = 0, bike = 0, walk = 0, travel = 0, delay = 0, sat = 0;
     const dest = new Map<string, number>();
     for (const a of members) {
-      if (isAffected(a, zone)) affected++;
       const m = a.usualMode;
       if (m === 3) car++;
       else if (m === 2) bike++;
@@ -84,11 +86,12 @@ export function cohortStats(agents: Agent[], zone: Zone, scale: number, delayOf:
       id, profile, district,
       label: `${PROFILE_LABEL[profile as Agent["profile"]].replace(/ \(.*\)/, "")} · ${district}`,
       people: n * scale,
-      affectedShare: +(affected / n).toFixed(2),
+      affectedShare: +(hit / n).toFixed(2),
       carShare: +(car / n).toFixed(2), bikeShare: +(bike / n).toFixed(2), walkShare: +(walk / n).toFixed(2),
       travelMinutes: +(travel / n).toFixed(1), delayMinutes: +(delay / n).toFixed(1), satisfaction: +(sat / n).toFixed(2),
       destinations: [...dest].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([d]) => d),
     });
   }
-  return stats.sort((a, b) => b.people * (0.2 + b.affectedShare) - a.people * (0.2 + a.affectedShare)).slice(0, max);
+  // d'abord les groupes qui comptent le plus de personnes concernées
+  return stats.sort((a, b) => b.people * (0.01 + b.affectedShare) - a.people * (0.01 + a.affectedShare)).slice(0, max);
 }

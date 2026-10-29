@@ -3,8 +3,9 @@ import type { City } from "../shared/city";
 import { BIKE_SPEED, Graph, Mode, WALK_SPEED } from "./graph";
 import { OUTDOOR, PLACE_LABEL, Places, type Place, type PlaceKind } from "./places";
 import { cortege, generateDayPlan, type CityEvent, type DayPlan } from "./events";
-import { createPopulation, PROFILES, type Agent, type Profile } from "./population";
-import { addOutings, insertOuting, planDay } from "./planner";
+import { createPopulation, PROFILES, type Agent, type Household, type Profile } from "./population";
+import { addOutings, insertOuting, planHousehold } from "./planner";
+import { CSP_LABEL, INCOME_MEDIAN } from "./demographics";
 import type { AgentInfo, DayReport, EngineMessage, Policy, Preview, Thought } from "./protocol";
 import { ROAD_FLAGS } from "../shared/city";
 import { WaterMask } from "./water";
@@ -66,6 +67,7 @@ interface Scheduled {
   cohorts: CohortStat[];
   /** habitants concernés (domicile, trajet ou destination dans la zone), mesurés à la décision */
   affected: Uint8Array;
+  affectedCount: number;
   /** réactions des groupes reçues de Claude (null tant qu'elles ne sont pas arrivées) */
   responses: CohortResponse[] | null;
   /** réactions déjà appliquées aujourd'hui, pour n'appliquer que la différence */
@@ -84,6 +86,7 @@ export class Engine {
   readonly graph: Graph;
   readonly places: Places;
   readonly agents: Agent[];
+  readonly households: Household[];
   policy: Policy = { ...DEFAULT_POLICY };
   day = 1;
   minute = 0;
@@ -129,6 +132,8 @@ export class Engine {
 
   // statistiques du jour
   private trips = { walk: 0, bike: 0, car: 0 };
+  /** cumulative home-to-work trips by mode, employed residents only (not reset daily) */
+  readonly commuteTrips = { walk: 0, bike: 0, car: 0 };
   private carMeters = 0;
   private carDelay = 0;
   private carFree = 0;
@@ -141,7 +146,7 @@ export class Engine {
     this.graph = new Graph(city);
     this.water = new WaterMask(city);
     this.places = new Places(city, this.graph);
-    this.agents = createPopulation(this.places, opts.residents, opts.tourists, opts.commuters, this.rand);
+    ({ agents: this.agents, households: this.households } = createPopulation(this.places, opts.residents, opts.tourists, opts.commuters, this.rand));
     for (const a of this.agents) a.district = districtOf(a);
     const exits = this.places.list("exit");
     this.genevaExits = [...exits].sort((a, b) => a.z + a.x - (b.z + b.x)).slice(0, Math.max(1, Math.ceil(exits.length / 3)));
@@ -179,8 +184,8 @@ export class Engine {
     }
     const wet = this.dayPlan.weather.kind === "pluie" || this.dayPlan.weather.kind === "neige";
     const ctx = { dow: this.date.getDay(), rand: this.rand, wet };
+    for (const hh of this.households) planHousehold(hh, this.places, ctx);
     for (const a of this.agents) {
-      a.plan = planDay(a, this.places, ctx);
       // sous la pluie, la plupart renoncent au lac et au parc
       if (wet) for (const act of a.plan) if (OUTDOOR.has(act.place.kind) && this.rand() < 0.7) act.place = a.home;
       for (const ev of this.dayPlan.events) if (!ev.byPlayer) this.maybeAttend(a, ev);
@@ -268,10 +273,13 @@ export class Engine {
         if (h < 6 || h >= 23) return { icon: "😴", text: "Zzz…" };
         if (a.profile === "pendulaire") return { icon: "🏡", text: "Chez moi, en dehors d'Annecy." };
         if (next && a.plan[a.step].until - this.minute < 30) return { icon: "⏰", text: `Je dois partir à ${nextAt}.` };
+        if (a.profile === "chomeur" && h >= 8 && h < 18) return { icon: "📄", text: h < 12 ? "Je mets à jour mon CV et je regarde les offres." : "Encore une candidature à envoyer…" };
+        if (a.profile === "inactif" && h >= 8 && h < 18) return { icon: "🧺", text: h < 12 ? "Le ménage, puis la liste des courses." : "Il faut penser au goûter des enfants." };
         if (wet) return { icon: "🌧️", text: "Il pleut, je reste au chaud." };
         return { icon: "🏠", text: h < 9 ? "Petit-déjeuner tranquille." : h > 19 ? "Soirée tranquille à la maison." : "Un moment au calme chez moi." };
       case "work":
         if (a.profile === "commercant") return { icon: "🏪", text: place.revenue > 300 ? "Bonne journée, la caisse se remplit !" : "Peu de clients aujourd'hui…" };
+        if (a.profile === "chomeur") return { icon: "🤝", text: "Rendez-vous France Travail, croisons les doigts." };
         return a.needs.energy < 0.4 ? { icon: "😩", text: `Vivement ${nextAt}…` } : { icon: "💼", text: "Concentré·e sur le travail." };
       case "school": return a.profile === "enfant" ? { icon: "🎒", text: "Vivement la récré !" } : { icon: "📚", text: "Les partiels approchent…" };
       case "exit": return a.profile === "frontalier" ? { icon: "🇨🇭", text: "Au bureau à Genève." } : { icon: "🚘", text: "Hors d'Annecy." };
@@ -280,7 +288,9 @@ export class Engine {
       case "park": return { icon: "🌳", text: "Un peu d'air frais au parc." };
       case "bar": return { icon: "🍻", text: "Santé ! Une bonne soirée entre amis." };
       case "food": return { icon: "🍝", text: "Qu'est-ce que je vais prendre…" };
-      case "grocery": return { icon: "🛒", text: "Ne rien oublier sur la liste." };
+      case "grocery":
+        if (this.lowIncome(a)) return { icon: "🧮", text: "Je regarde les prix, il faut tenir jusqu'à la fin du mois." };
+        return { icon: "🛒", text: a.profile === "inactif" ? "Courses pour toute la famille, ne rien oublier." : "Ne rien oublier sur la liste." };
       case "shop": return { icon: "🛍️", text: "Juste regarder… bon, peut-être acheter." };
       case "culture": return { icon: "🎨", text: "Fascinant." };
       case "event": return { icon: "🎉", text: `Quelle ambiance : ${place.name} !` };
@@ -320,6 +330,9 @@ export class Engine {
       else if (end <= now + 10) firstDay++; // déjà passé aujourd'hui : dès demain à la même heure
       else firstStart = Math.max(start, now);
     }
+    // une grève des trains concerne ceux qui prennent le train, pas ceux qui habitent près de la gare
+    const affected = Uint8Array.from(this.agents, (a) =>
+      (p.kind === "greve" ? a.plan.some((act) => act.place.kind === "station") : isAffected(a, geo.zone)) ? 1 : 0);
     const sid = this.nextSid++;
     const when = `${firstDay === this.day ? "aujourd'hui" : firstDay === this.day + 1 ? "demain" : `dans ${firstDay - this.day} jours`} à ${hhmm(firstStart)}` +
       `, ${duration >= 1440 ? "toute la journée" : `${Math.round(duration / 6) / 10} h par jour`}${days > 1 ? `, pendant ${days} jours` : ""}`;
@@ -327,11 +340,13 @@ export class Engine {
       sid, p, geo,
       summary: { kind: p.kind, title: p.title, description: p.description, location: p.location, streets: p.streets, route: p.route, days, when },
       firstDay, lastDay: firstDay + days - 1, firstStart, firstEnd, start, end,
-      cohorts: cohortStats(this.agents, geo.zone, AGENT_SCALE, (a) => a.delayMinutes),
-      affected: Uint8Array.from(this.agents, (a) => (isAffected(a, geo.zone) ? 1 : 0)),
+      cohorts: [],
+      affected,
+      affectedCount: affected.reduce((n, v) => n + v, 0),
       responses: null, applied: null, baseline: null, analysisSent: false, rerouted: 0,
       zoneShops: p.kind === "pietonnisation" ? this.places.all.filter((pl) => (pl.kind === "shop" || pl.kind === "food" || pl.kind === "bar") && geo.zone.contains(pl.x, pl.z)) : [],
     };
+    s.cohorts = cohortStats(this.agents, affected, AGENT_SCALE, (a) => a.delayMinutes);
     this.scheduled.set(sid, s);
     if (firstDay === this.day) this.instantiate(s, firstStart, firstEnd);
     this.outbox.push({ type: "cohortRequest", sid, event: s.summary, cohorts: s.cohorts });
@@ -507,7 +522,7 @@ export class Engine {
       const r = byId.get(cohortId(a));
       if (!r) continue;
       const old = prev?.get(r.id);
-      const hit = isAffected(a, zone);
+      const hit = s.affected[a.id] === 1;
       const more = (v: number, o = 0) => Math.max(0, v - (old ? o : 0));
       if (hit) a.bias = { car: r.car, bike: r.bike, walk: r.walk };
       // départ avancé ou retardé, si la personne n'est pas encore partie
@@ -663,7 +678,8 @@ export class Engine {
       let participants = 0;
       if (EVENT_SPECS[ev.kind].attraction > 0) for (const a of this.agents) if (!a.trip && a.plan[a.step]?.place === place) participants += AGENT_SCALE;
       this.outbox.push({ type: "impact", impact: { sid: s.sid, title: ev.title, kind: ev.kind, minute: Math.round(this.minute), active, reference, before, now, rerouted: s.rerouted, participants } });
-      if (!s.analysisSent && this.minute - ev.start >= Math.min(60, (ev.end - ev.start) * 0.6)) {
+      // l'analyse attend une heure de recul et assez de trajets mesurés (pas en pleine nuit)
+      if (!s.analysisSent && this.minute - ev.start >= Math.min(60, (ev.end - ev.start) * 0.6) && this.log.count(from, to, s.affected) >= Math.min(30, 5 + s.affectedCount * 0.05)) {
         s.analysisSent = true;
         this.outbox.push({ type: "analysisRequest", sid: s.sid, event: s.summary, before, after: now, reference });
       }
@@ -741,6 +757,15 @@ export class Engine {
     }
   }
 
+  /** Spending scales with household income per consumption unit (elasticity 0.6, bounded). */
+  private spendFactor(a: Agent): number {
+    return clamp((a.household.income / INCOME_MEDIAN) ** 0.6, 0.5, 2);
+  }
+
+  private lowIncome(a: Agent): boolean {
+    return a.profile !== "touriste" && a.household.income < 0.6 * INCOME_MEDIAN;
+  }
+
   private chooseMode(a: Agent, from: Place, to: Place): Mode {
     if (a.carpoolDay === this.day) return Mode.Car;
     if (a.profile === "frontalier" || a.profile === "pendulaire") {
@@ -752,9 +777,9 @@ export class Engine {
     // utilités en « minutes équivalentes » (plus c'est bas, mieux c'est)
     const w = this.dayPlan.weather.kind;
     const wet = w === "pluie" || w === "neige";
-    const options: [Mode, number][] = [[Mode.Walk, (d / WALK_SPEED / 60) * (a.age > 70 ? 1.6 : 1) * (wet ? 1.4 : 1) + (d > 2500 ? 30 : 0)]];
+    const options: [Mode, number][] = [[Mode.Walk, (d / WALK_SPEED / 60) * (a.age > 70 ? 1.6 : 1) * (a.age < 11 ? 1.3 : 1) * (wet ? 1.4 : 1) + (d > 2500 ? 30 : 0)]];
     if (a.hasBike && a.age >= 8) options.push([Mode.Bike, d / BIKE_SPEED / 60 + 4 / this.policy.bikeComfort + (wet ? 12 : 0) + (w === "neige" ? 20 : 0)]);
-    if (a.hasCar && a.profile !== "enfant") {
+    if (a.hasCar && a.age >= 18 && a.profile !== "enfant") {
       const parking = centre && to !== a.home ? this.policy.parkingPrice * 4 : 0; // 1 € ≈ 4 min de « valeur »
       options.push([Mode.Car, (d / 8.5 / 60) * this.policy.carFriction + 6 + parking]);
     }
@@ -796,7 +821,10 @@ export class Engine {
     }
     a.trip = { path, mode, d: 0, seg: 0, startMinute: this.minute, freeMinutes: free / 60, style };
     if (style === "run") a.trip.freeMinutes *= WALK_SPEED / RUN_SPEED;
-    this.trips[mode === Mode.Car ? "car" : mode === Mode.Bike ? "bike" : "walk"]++;
+    const key = mode === Mode.Car ? "car" : mode === Mode.Bike ? "bike" : "walk";
+    this.trips[key]++;
+    // home -> work trips of employed residents (cumulative, for calibration against INSEE)
+    if (to.kind === "work" && from === a.home && !style && (a.profile === "salarie" || a.profile === "commercant")) this.commuteTrips[key]++;
     if (!style && from === a.home) a.usualMode = mode;
     if (mode === Mode.Car) {
       this.carMeters += path.length;
@@ -855,7 +883,7 @@ export class Engine {
     const blackout = !!this.active("panne") && place.kind !== "event" && place.kind !== "lake";
     // dans une rue piétonne, on flâne plus longtemps et on dépense davantage
     const pedestrian = this.pedestrianZones.some((s) => s.geo.zone.contains(place.x, place.z));
-    const spend = blackout ? 0 : (SPEND[place.kind] ?? 0) * (a.profile === "touriste" ? 1.5 : 1) * (pedestrian ? 1.3 : 1) * (0.6 + this.rand() * 0.8);
+    const spend = blackout ? 0 : (a.age < 12 ? 0 : (SPEND[place.kind] ?? 0)) * this.spendFactor(a) * (a.profile === "touriste" ? 1.5 : 1) * (pedestrian ? 1.3 : 1) * (0.6 + this.rand() * 0.8);
     if (spend > 0) {
       place.revenue += spend * AGENT_SCALE;
       a.spentToday += spend;
@@ -894,9 +922,17 @@ export class Engine {
       case "lake": say("😍", 0.35, `Quelle vue sur le lac depuis ${spot} !`, "Les montagnes se reflètent dans le lac, sublime.", `On est bien à ${spot}.`, "Annecy, la Venise des Alpes."); break;
       case "park": say("🌳", 0.2, "Un peu de calme au parc.", "Les enfants adorent ce parc.", "Joli, les couleurs d'automne."); break;
       case "bar": say("🍻", 0.35, "Un verre entre amis, enfin !", "L'apéro savoyard, il n'y a que ça de vrai.", "Ambiance sympa ce soir."); break;
-      case "food": say("🍝", 0.15, "Bien mangé ce midi.", "Une bonne tartiflette, parfait.", "Un peu cher, ce restaurant…"); break;
-      case "grocery": say("🛒", 0.1, "Les courses, c'est fait.", "Les prix ont encore augmenté…"); break;
-      case "shop": say("🛍️", 0.15, "Trouvé exactement ce que je cherchais.", "Il y a trop de vitrines vides en ville."); break;
+      case "food":
+        if (this.lowIncome(a)) say("💸", 0.2, "Un restau, c'est cher… faut faire attention en fin de mois.", "Je me suis privé·e, mais ça fait plaisir.");
+        else say("🍝", 0.15, "Bien mangé ce midi.", "Une bonne tartiflette, parfait.", "Un peu cher, ce restaurant…");
+        break;
+      case "grocery":
+        if (this.lowIncome(a)) say("💸", 0.25, "Les prix ont encore augmenté, la fin de mois approche…", "J'ai pris les marques distributeur, il faut compter.");
+        else if (a.profile === "inactif") say("🛒", 0.15, "Le frigo est plein pour la semaine.", "Les courses, c'est fait, direction la maison.");
+        else say("🛒", 0.1, "Les courses, c'est fait.", "Les prix ont encore augmenté…");
+        break;
+      case "shop": if (this.lowIncome(a)) { say("💸", 0.2, "Tout est trop cher, j'attendrai les soldes.", "Je regarde mais je n'achète pas, fin de mois oblige."); break; }
+        say("🛍️", 0.15, "Trouvé exactement ce que je cherchais.", "Il y a trop de vitrines vides en ville."); break;
       case "culture": say("🎨", 0.3, "Belle expo, je recommande.", "Le château d'Annecy vaut le détour."); break;
       case "school": if (a.profile === "enfant") say("🎒", 0.1, "Vivement la récré !", "J'ai oublié mes devoirs…"); break;
       case "event": {
@@ -907,6 +943,9 @@ export class Engine {
         else say("✨", 0.5, `Sympa, ${place.name}.`);
         break;
       }
+      case "home":
+        if (a.profile === "chomeur") say("📄", 0.1, "Une réponse à ma candidature ? Toujours rien…", "Je retravaille mon CV ce soir.", "France Travail m'a proposé une formation.");
+        break;
       case "work":
         if (a.needs.energy < 0.35) say("😩", 0.4, "Encore une longue journée…", "Besoin de vacances.");
         break;
@@ -984,6 +1023,8 @@ export class Engine {
       jams: [...roadSlow].sort((a, b) => b[1] - a[1]).slice(0, 5).map(([name, s]) => ({ name, slowdown: +s.toFixed(2) })),
       policy: { ...this.policy },
       weather: this.dayPlan.weather,
+      households: this.households.length,
+      meanHouseholdSize: +(this.agents.length / Math.max(1, this.households.length)).toFixed(2),
       events: this.dayPlan.events.map((e) => ({ kind: e.kind, title: e.title, visits: this.eventPlaces.get(e.id)!.visits * AGENT_SCALE })),
     };
     this.graph.closed.fill(0);
@@ -1105,6 +1146,30 @@ export class Engine {
     return [x, z, mode === 0 ? hash01(a.id * 3 + 2) * Math.PI * 2 : heading, mode];
   }
 
+  /** Household summary and each member's relation to `a`, derived from roles (adult / child) and household kind. */
+  private householdInfo(a: Agent): AgentInfo["household"] {
+    const hh = a.household;
+    const nAdults = hh.kind === "famille" ? 2 : hh.kind === "monoparentale" ? 1 : hh.members.length;
+    const isChild = (m: Agent) => (hh.kind === "famille" || hh.kind === "monoparentale" ? hh.members.indexOf(m) >= nAdults : m.age < 18);
+    const kids = hh.members.filter(isChild).length;
+    const plural = (n: number) => `${n} enfant${n > 1 ? "s" : ""}`;
+    const kind = {
+      seul: "personne seule", colocation: "colocation", couple: "couple sans enfant",
+      famille: `couple avec ${plural(kids)}`, monoparentale: `famille monoparentale, ${plural(kids)}`,
+      touristes: "groupe de touristes", pendulaire: "vit hors de la zone",
+    }[hh.kind];
+    const relation = (m: Agent) => {
+      const c = isChild(m);
+      if (isChild(a)) return c ? "frère / sœur" : "parent";
+      if (c) return "enfant";
+      return hh.kind === "colocation" ? "colocataire" : hh.kind === "couple" || hh.kind === "famille" ? "conjoint·e" : "compagnon de voyage";
+    };
+    return {
+      kind, cars: hh.cars,
+      members: hh.members.filter((m) => m !== a).map((m) => ({ id: m.id, name: m.name, age: m.age, relation: relation(m) })),
+    };
+  }
+
   /** Fiche détaillée d'un habitant, pour l'interface. */
   inspect(id: number): AgentInfo | null {
     const a = this.agents[id];
@@ -1114,7 +1179,10 @@ export class Engine {
     const current = a.plan[a.step];
     const mode = a.trip ? (a.trip.style === "run" ? "en courant" : a.trip.style === "dog" ? "avec son chien 🐕" : ["", "à pied", "à vélo", "en voiture"][a.trip.mode]) : null;
     return {
-      id: a.id, name: a.name, age: a.age, profile: a.profile,
+      id: a.id, name: a.name, age: a.age, sex: a.sex, csp: a.csp ? CSP_LABEL[a.csp] : null, partTime: a.partTime,
+      monthlyIncome: Math.round(a.household.income / 12 / 10) * 10,
+      household: this.householdInfo(a),
+      profile: a.profile,
       hasCar: a.hasCar, hasBike: a.hasBike,
       needs: { ...a.needs }, satisfaction: a.satisfaction,
       x: a.x, z: a.z, visible: !!a.trip || (!!current && OUTDOOR.has(current.place.kind)),
@@ -1179,6 +1247,10 @@ function hash01(n: number) {
   let h = Math.imul(n ^ 0x9e3779b9, 0x85ebca6b);
   h = Math.imul(h ^ (h >>> 13), 0xc2b2ae35);
   return ((h ^ (h >>> 16)) >>> 0) / 4294967296;
+}
+
+function clamp(v: number, lo: number, hi: number) {
+  return Math.min(hi, Math.max(lo, v));
 }
 
 function clamp01(v: number) {
