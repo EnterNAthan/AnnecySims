@@ -11,7 +11,9 @@ import { AgentsView } from "./render/agents";
 import { EventsView, hhmm } from "./render/events";
 import { ThoughtBubbles } from "./render/thoughts";
 import { setupCommandBar } from "./ui/command";
+import { setupResidentChat } from "./ui/residentChat";
 import { AiConfigSchema } from "./shared/aiConfig";
+import type { AiPopulation } from "./sim/aiPopulation";
 import { DecisionsPanel } from "./ui/decisions";
 import { HistoryPanel } from "./ui/history";
 import { PreviewLayer, TrafficLayer } from "./render/traffic";
@@ -32,21 +34,24 @@ const escapeHtml = (text: string) => text.replace(/[&<>"']/g, (c) => ({ "&": "&a
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 50);
-  // Prototype IA : exactement 50 résidents, sans touristes ni navetteurs supplémentaires.
+  const residents = Number(params.get("pop") ?? 2550);
+  // 50 habitants suivis par Qwen parmi 2 550 résidents ; les autres gardent les règles du moteur.
   const tourists = 0;
   const commuters = 0;
   const startDate = new Date();
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });
   const send = (msg: ToWorker, transfer: Transferable[] = []) => worker.postMessage(msg, transfer);
+  const residentChat = setupResidentChat((id, text) => send({ type: "chat", id, text }));
   // le premier plan du jour arrive avant que la page n'écoute le worker : on le garde de côté
   let firstPlan: DayPlan | null = null;
+  let firstAiPopulation: AiPopulation | null = null;
   const ready = new Promise<void>((resolve, reject) => {
     worker.addEventListener("error", (event) => reject(new Error(event.message || "Le moteur de simulation ne démarre pas")), { once: true });
     worker.addEventListener("message", (e: MessageEvent<FromWorker>) => {
       if (e.data.type === "ready") resolve();
       else if (e.data.type === "dayStart") firstPlan = e.data.plan;
+      else if (e.data.type === "aiPopulation") firstAiPopulation = e.data.population;
     });
   });
   send({ type: "init", residents, tourists, commuters, seed: 2026, startDate: startDate.toISOString(), aiEnabled: params.get("ai") !== "off" });
@@ -146,8 +151,7 @@ async function main() {
   });
   const bubbles = new ThoughtBubbles(agents, (id) => select(id));
   world.scene.add(bubbles.group);
-  const feed: Thought[] = [];
-  renderFeed(feed);
+  renderFeedShell();
   $("#feed").addEventListener("click", (e) => {
     const row = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
     if (row) select(Number(row.dataset.id));
@@ -156,6 +160,7 @@ async function main() {
     const t = e.target as HTMLElement;
     if (t.dataset.action === "close") select(-1);
     if (t.dataset.action === "follow") follow = true;
+    if (t.dataset.action === "chat" && info) residentChat.open(info.id, info.name);
     const member = t.closest<HTMLElement>(".household [data-id]");
     if (member) select(Number(member.dataset.id));
   });
@@ -271,6 +276,14 @@ async function main() {
   let frameCount = 0;
   worker.onmessage = (e: MessageEvent<FromWorker>) => {
     const msg = e.data;
+    if (msg.type === "chat") { residentChat.update(msg.chat); return; }
+    if (msg.type === "aiPopulation") {
+      const picker = $<HTMLSelectElement>("#ai-follow");
+      picker.replaceChildren(new Option(`${msg.population.tracked.length} habitants IA · ${msg.population.total - msg.population.tracked.length} automatiques`, ""));
+      for (const a of msg.population.tracked) picker.add(new Option(`${a.name} · ${PROFILE_LABEL[a.profile as keyof typeof PROFILE_LABEL]}`, String(a.id)));
+      picker.onchange = () => { if (picker.value !== "") select(Number(picker.value)); };
+      return;
+    }
     if (msg.type === "aiLog") return;
     if (msg.type === "frame") {
       frame.set(new Float32Array(msg.buffer, 0, msg.count * FRAME_STRIDE));
@@ -280,9 +293,7 @@ async function main() {
       renderCounts(msg.counts);
       if (msg.thoughts.length) {
         bubbles.push(msg.thoughts, performance.now() / 1000);
-        feed.push(...msg.thoughts);
-        if (feed.length > 7) feed.splice(0, feed.length - 7);
-        renderFeed(feed);
+        pushFeed(msg.thoughts);
       }
     } else if (msg.type === "day") {
       dayToast(msg.report, () => history.openDay(msg.report.day));
@@ -324,6 +335,7 @@ async function main() {
   };
 
   if (firstPlan) worker.onmessage(new MessageEvent("message", { data: { type: "dayStart", day: 1, plan: firstPlan } }));
+  if (firstAiPopulation) worker.onmessage(new MessageEvent("message", { data: { type: "aiPopulation", population: firstAiPopulation } }));
   let last = performance.now(), lastPanelTick = 0;
   const loop = (now: number) => {
     const dt = Math.min(0.1, (now - last) / 1000);
@@ -417,9 +429,6 @@ function setupControls(clock: SimClock, agents: AgentsView) {
   // mode zen : masque les panneaux pour ne garder que la ville
   const zen = () => document.body.classList.toggle("zen");
   $("#zen").onclick = zen;
-  window.addEventListener("keydown", (e) => {
-    if (e.key === "h" && !(e.target instanceof HTMLInputElement)) zen();
-  });
   return { sync };
 }
 
@@ -455,10 +464,31 @@ function renderCounts(c: LiveCounts) {
   $("#counts").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span class="v">${fmt(v)}</span>`).join("");
 }
 
-function renderFeed(feed: Thought[]) {
+/** Pensées conservées dans le fil : de quoi remonter plusieurs heures de ville. */
+const FEED_LIMIT = 200;
+
+function renderFeedShell() {
   $("#feed").innerHTML = `<div class="panel-title">Voix de la ville</div>` +
-    (feed.length ? "" : `<div class="muted small">Les habitants réagissent ici aux événements et aux décisions. Cliquez sur quelqu'un pour lire ses pensées du quotidien.</div>`) +
-    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}${th.about && !th.voice ? ` <small class="about-tag">${th.about}</small>` : ""}<br><em>« ${escapeHtml(th.text)} »</em></div></div>`).join("");
+    `<div class="muted small" id="feed-empty">Les pensées IA apparaissent après les premières réponses du modèle, même si les habitants sont dans un bâtiment. Pour suivre une personne : ⚙ → Habitants IA. Les réactions aux événements apparaissent aussi ici.</div>` +
+    `<div id="feed-list"></div>`;
+}
+
+function feedRow(th: Thought) {
+  return `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}${th.voice ? ` <small class="voice-tag">${th.voice}</small>` : ""}${th.about && !th.voice ? ` <small class="about-tag">${th.about}</small>` : ""} <small class="feed-time">${hhmm(th.minute)}</small><br><em>« ${escapeHtml(th.text)} »</em></div></div>`;
+}
+
+/**
+ * Insère les nouvelles pensées en haut du fil, sans réécrire les anciennes :
+ * celui qui remonte l'historique ne voit pas son défilement reparti de zéro.
+ */
+function pushFeed(thoughts: Thought[]) {
+  const list = $("#feed-list");
+  const before = list.scrollHeight;
+  list.insertAdjacentHTML("afterbegin", thoughts.slice().reverse().map(feedRow).join(""));
+  // déjà remonté dans l'historique : on compense la hauteur ajoutée pour rester sur sa lecture
+  if (list.scrollTop > 0) list.scrollTop += list.scrollHeight - before;
+  while (list.children.length > FEED_LIMIT) list.lastElementChild!.remove();
+  document.getElementById("feed-empty")?.remove();
 }
 
 /** Programme du jour : les décisions du joueur d'abord, la vie courante de la ville repliée. */
@@ -489,6 +519,7 @@ function renderAgent(a: AgentInfo, following: boolean) {
     <div class="muted small">Foyer : ${a.household.kind} · ${a.household.cars} voiture${a.household.cars > 1 ? "s" : ""} · ~${a.monthlyIncome.toLocaleString("fr-FR")} €/mois par UC</div>
     ${a.household.members.length ? `<ul class="household">${a.household.members.map((m) => `<li data-id="${m.id}"><b>${m.name}</b> ${m.age} ans<span>${m.relation}</span></li>`).join("")}</ul>` : ""}
     <div class="now">${a.now}</div>
+    ${a.intelligence?.mode === "llm" ? `<button data-action="chat" class="wide">💬 Discuter</button>` : ""}
     ${a.intelligence ? `<details><summary>Intelligence : ${escapeHtml(a.intelligence.status)}</summary><ul>${a.intelligence.memories.map((m) => `<li>${escapeHtml(m)}</li>`).join("")}</ul></details>` : ""}
     <div class="mind"><span>${a.mind.icon}</span><em>« ${a.mind.text} »</em></div>
     ${bar("Énergie", a.needs.energy)}${bar("Vie sociale", a.needs.social)}${bar("Loisirs", a.needs.fun)}${bar("Satisfaction", a.satisfaction)}

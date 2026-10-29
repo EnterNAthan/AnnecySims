@@ -5,6 +5,8 @@ import { DecisionSchema, validateBatch, type Decision } from "../shared/intellig
 import type { AiLog } from "../shared/intelligence";
 import { DEFAULT_AI_CONFIG, type AiConfig } from "../shared/aiConfig";
 import { buildAiContext } from "./aiContext";
+import { selectAiPopulation } from "./aiPopulation";
+import type { ResidentChat } from "../shared/chat";
 
 interface Mind {
   memories: string[];
@@ -19,6 +21,37 @@ interface Mind {
 
 /** Orchestration réseau séparée du moteur pur : aucun appel ne bloque les ticks. */
 export class Intelligence {
+  private chats = new Map<number, ResidentChat & { biography: string }>();
+
+  async converse(id: number, text: string | undefined, publish: (state: ResidentChat) => void) {
+    const a = this.tracked.find((person) => person.id === id);
+    if (!a) { publish({ id, name: "Habitant", messages: [], busy: false, error: "Choisis un habitant IA dans la liste ⚙." }); return; }
+    let state = this.chats.get(id);
+    if (!state) { state = { id, name: a.name, messages: [], busy: false, biography: "" }; this.chats.set(id, state); }
+    const emit = () => publish({ id, name: state.name, messages: [...state.messages], busy: state.busy, error: state.error });
+    if (text === undefined || state.busy) { emit(); return; }
+    text = text.trim().slice(0, 1000);
+    if (!text) return;
+    if (!this.config.enabled) { state.error = "IA suspendue dans la configuration"; emit(); return; }
+    state.busy = true; state.error = undefined;
+    emit();
+    try {
+      const mind = this.mind(a);
+      const response = await fetch("/api/agents/chat", {
+        method: "POST", headers: { "Content-Type": "application/json" }, signal: AbortSignal.timeout(95000),
+        body: JSON.stringify({ context: buildAiContext(this.engine, a, mind, [], []), biography: state.biography,
+          messages: [...state.messages.slice(-18), { role: "user", content: text }] }),
+      });
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error ?? "Conversation indisponible");
+      if (typeof result.reply !== "string" || typeof result.biography !== "string") throw new Error("Réponse invalide");
+      state.biography ||= result.biography;
+      state.messages.push({ role: "user", content: text }, { role: "assistant", content: result.reply });
+      state.messages = state.messages.slice(-100);
+      this.remember(a, `Échange avec le visiteur : ${text.slice(0, 200)} — J'ai répondu : ${result.reply.slice(0, 300)}`);
+    } catch (error) { state.error = error instanceof Error ? error.message : "Conversation indisponible"; }
+    finally { state.busy = false; emit(); }
+  }
   private minds = new Map<number, Mind>();
   private active = 0;
   private cursor = 0;
@@ -27,6 +60,8 @@ export class Intelligence {
   private failedRequests = 0;
   private cooldownUntil = 0;
   private config = { ...DEFAULT_AI_CONFIG };
+  private trackedIds = new Set<number>();
+  private tracked: Agent[] = [];
   private pending: { id: number; context: string; resolve: (value: Decision) => void; reject: (error: unknown) => void }[] = [];
 
   private requestDecision(id: number, context: string): Promise<Decision> {
@@ -59,13 +94,21 @@ export class Intelligence {
   configure(config: AiConfig) {
     const oldInterval = this.config.intervalSeconds * 1000;
     this.config = { ...config };
+    this.tracked = selectAiPopulation(this.engine.agents, config.agentLimit);
+    this.trackedIds = new Set(this.tracked.map((a) => a.id));
     for (const mind of this.minds.values()) {
       mind.next = Math.max(this.now(), mind.next + config.intervalSeconds * 1000 - oldInterval);
       mind.memories = mind.memories.slice(-config.memoryLimit);
     }
   }
 
-  constructor(private engine: Engine, private onLog: (entry: AiLog) => void = () => {}, private now = () => performance.now()) {}
+  constructor(private engine: Engine, private onLog: (entry: AiLog) => void = () => {}, private now = () => performance.now()) {
+    this.configure(this.config);
+  }
+
+  population() {
+    return { total: this.engine.agents.length, tracked: this.tracked.map((a) => ({ id: a.id, name: a.name, profile: a.profile })) };
+  }
 
   private log(a: Agent, kind: AiLog["kind"], text: string, started?: number) {
     this.onLog({ kind, agentId: a.id, name: a.name, day: this.engine.day,
@@ -95,7 +138,7 @@ export class Intelligence {
   }
 
   tick() {
-    const agents = this.engine.agents;
+    const agents = this.tracked;
     const now = this.now();
     if (!this.config.enabled || !agents.length || now < this.nextDispatch || now < this.cooldownUntil || this.inFlightRequests >= this.config.concurrency) return;
     let dispatched = 0;
@@ -111,8 +154,9 @@ export class Intelligence {
   }
 
   inspect(id: number) {
+    if (!this.trackedIds.has(id)) return { status: "Comportement automatique", memories: [], mode: "automatic" as const };
     const mind = this.minds.get(id);
-    return mind ? { status: mind.status, memories: [...mind.memories], goal: mind.goal, plan: [...mind.plan] } : { status: "En attente", memories: [] };
+    return mind ? { status: mind.status, memories: [...mind.memories], goal: mind.goal, plan: [...mind.plan], mode: "llm" as const } : { status: "En attente", memories: [], mode: "llm" as const };
   }
 
   private async reflect(a: Agent) {
@@ -134,6 +178,7 @@ export class Intelligence {
     try {
       const context = buildAiContext(this.engine, a, mind, nearby, places);
       const decision = await this.requestDecision(a.id, context);
+      if (!this.trackedIds.has(a.id)) { mind.status = "Retour au comportement automatique"; return; }
       mind.failures = 0;
       if (day !== this.engine.day || this.engine.minute - minute > 15) {
         mind.status = "Situation modifiée, nouvelle décision nécessaire";
@@ -156,9 +201,15 @@ export class Intelligence {
           if (mind.revision !== revision) {
             outcome = "Conversation différée : une nouvelle parole est arrivée pendant la réflexion";
           } else {
-          this.remember(target, `${a.name} te dit : ${decision.message}`);
+          if (this.trackedIds.has(target.id)) this.remember(target, `${a.name} te dit : ${decision.message}`);
           outcome = `À ${target.name} : ${decision.message}`;
           this.log(a, "conversation", outcome);
+          if (!this.trackedIds.has(target.id)) {
+            // Les figurants gardent leurs règles : réponse simple, sans appel ni mémoire LLM.
+            const reply = target.needs.energy < 0.3 ? "Je suis fatigué, je vais me reposer." : target.plan[target.step]?.place === target.work ? "Je travaille pour le moment, on se reparle plus tard." : "Bonjour ! Je continue ma journée, à bientôt.";
+            this.remember(a, `${target.name} te répond (automatique) : ${reply}`);
+            this.log(target, "conversation", `Réponse automatique à ${a.name} : ${reply}`);
+          }
           }
         } else outcome = "Conversation impossible : interlocuteur absent ou message vide";
       }

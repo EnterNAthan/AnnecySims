@@ -20,11 +20,11 @@ npm run build-city     # data/osm-raw.json → public/city.json (versionné, ~2,
 
 `sim:headless` sert de test de non-régression du moteur : vérifier les temps et la cohérence du bilan après une modif dans `src/sim/`.
 
-Paramètres d'URL de la page : `?pop=N` (50 habitants par défaut), `?h=N` (heure de départ), `?paused`, `?debug` (expose `window.sim`), `?ai=off` (désactive les décisions individuelles).
+Paramètres d'URL de la page : `?pop=N` (2 550 résidents par défaut : 50 suivis par IA et 2 500 automatiques), `?h=N` (heure de départ), `?paused`, `?debug` (expose `window.sim`), `?ai=off` (désactive les décisions individuelles).
 
 ## Intelligence individuelle
 
-Les habitants utilisent Arkane/Qwen via `server/intelligence.ts`, séparément des routes municipales Claude Code et de leur repli local. `src/sim/intelligence.ts` orchestre les décisions sans bloquer les ticks ; `aiContext.ts` transmet les besoins, souvenirs, contraintes, mobilité et événements proches actifs du nouveau moteur. Les visiteurs des événements et véhicules de transit restent gérés par le moteur : ils ne sont pas ajoutés aux appels Qwen des résidents.
+Seuls 50 habitants sélectionnés de façon stable utilisent Arkane/Qwen via `server/intelligence.ts`, séparément des routes municipales Claude Code et de leur repli local. Les 2 500 autres résidents conservent les plannings automatiques. La limite IA est réglable dans `/stats` et les personnes suivies sont accessibles dans le menu d'affichage. `src/sim/intelligence.ts` orchestre les décisions sans bloquer les ticks ; `aiContext.ts` transmet les besoins, souvenirs, contraintes, mobilité et événements proches actifs du nouveau moteur. Les visiteurs des événements et véhicules de transit restent gérés par le moteur : ils ne sont pas ajoutés aux appels Qwen des résidents.
 
 `/stats` expose les mesures et la configuration (`/api/ai-config`). Profil stable : groupes de cinq, un appel en cours, `reasoning_effort: none`, un agent = une personne (`AGENT_SCALE = 1`). La clé `ARKANE_API_KEY` reste côté serveur. `npm run test:ai` vérifie aussi le raccordement aux événements, bus et parkings. Voir `benchmarks/README.md` pour les mesures Arkane isolées. Les endpoints sont disponibles uniquement avec le serveur de développement.
 

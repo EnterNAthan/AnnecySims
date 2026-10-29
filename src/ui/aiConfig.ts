@@ -6,6 +6,7 @@ export function setupAiConfig() {
   const status = document.querySelector<HTMLElement>("#config-status")!;
   const rows: [keyof AiConfig, string, string, string, number?, number?, number?][] = [
     ["enabled", "Intelligence active", "checkbox", "Suspend ou reprend les nouvelles décisions."],
+    ["agentLimit", "Habitants suivis par IA", "number", "Seules ces personnes appellent le modèle. Le reste de la population conserve ses comportements automatiques.", 0, 100, 1],
     ["batchSize", "Personnes par appel", "number", "1 pour comparer, 5 pour tester les décisions groupées. Une mémoire distincte par personne.", 1, 5, 4],
     ["concurrency", "Appels simultanés", "number", "Maximum de requêtes en cours par ville et sur le serveur.", 1, 100, 1],
     ["intervalSeconds", "Intervalle par personne (s)", "number", "Délai minimum entre deux décisions d’un habitant.", 1, 600, 1],

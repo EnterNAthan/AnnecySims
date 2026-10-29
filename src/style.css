@@ -493,8 +493,18 @@ button.wide {
   right: 12px;
   bottom: 28px;
   width: 310px;
-  max-height: 260px;
+  display: flex;
+  flex-direction: column;
+  max-height: min(55vh, 420px);
   overflow: hidden;
+}
+
+/* historique consultable : on remonte le fil des réflexions passées */
+#feed-list {
+  min-height: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
 }
 
 .feed-row {
@@ -518,6 +528,11 @@ button.wide {
 
 .feed-row em {
   color: var(--muted);
+}
+
+.feed-time {
+  color: var(--muted);
+  font-size: 10px;
 }
 
 .event-label.player {

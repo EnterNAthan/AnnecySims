@@ -537,7 +537,7 @@ button.wide {
   letter-spacing: 0.02em;
 }
 
-/* ---------- mode zen (touche H) ---------- */
+/* ---------- mode zen ---------- */
 .panel,
 #right,
 #settings > *:not(#zen) {
@@ -563,7 +563,6 @@ body.zen #settings > *:not(#zen) {
 }
 @media (max-width: 900px) {
   #today,
-  #feed,
   #live {
     display: none;
   }

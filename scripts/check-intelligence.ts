@@ -10,7 +10,7 @@ const engine = new Engine(JSON.parse(readFileSync("public/city.json", "utf8")), 
 assert.equal(engine.agents.length, 100);
 let now = 0;
 const ai = new Intelligence(engine, undefined, () => now);
-ai.configure({ ...DEFAULT_AI_CONFIG, batchSize: 1, requestsPerSecond: 1, intervalSeconds: 30 });
+ai.configure({ ...DEFAULT_AI_CONFIG, agentLimit: 100, batchSize: 1, requestsPerSecond: 1, intervalSeconds: 30 });
 let calls = 0;
 let continuedPlan = false;
 globalThis.fetch = async (_url, options) => {

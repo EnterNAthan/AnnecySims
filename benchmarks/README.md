@@ -1,5 +1,7 @@
 # Laboratoire Arkane
 
+La ville utilise par défaut 2 550 résidents : 50 suivis par le modèle et 2 500 automatiques. Le laboratoire conserve ses propres fixtures de 100 personnes pour isoler les paramètres API. Le nombre d'habitants IA se règle indépendamment de la population totale dans `/stats` ; changer le nombre de figurants n'augmente pas le nombre de personnes envoyées au modèle.
+
 Le laboratoire s'exécute sans navigateur et sans modifier la ville ou ses réglages. Les profils sont reproductibles (100 habitants, graine 2026), avec cinq personnes, contraintes, proches et souvenirs. La clé vient de `.env` et n'est jamais écrite dans les rapports.
 
 ```powershell

@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import type { City } from "../src/shared/city";
 import { Engine } from "../src/sim/engine";
 
-const residents = Number(process.argv[2] ?? 50);
+const residents = Number(process.argv[2] ?? 2550);
 const days = Number(process.argv[3] ?? 2);
 const city: City = JSON.parse(readFileSync("public/city.json", "utf8"));
 

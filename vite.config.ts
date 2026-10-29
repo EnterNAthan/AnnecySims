@@ -1,5 +1,6 @@
 import { defineConfig, loadEnv, type Plugin } from "vite";
 import { decide, type RequestMetrics } from "./server/intelligence";
+import { chat } from "./server/chat";
 import { createModelStats } from "./server/modelStats";
 import { AiConfigSchema, DEFAULT_AI_CONFIG } from "./src/shared/aiConfig";
 import type { IncomingMessage, ServerResponse } from "node:http";
@@ -72,6 +73,32 @@ export default defineConfig(({ mode }) => {
       let active = 0;
       const stats = createModelStats();
       let config = { ...DEFAULT_AI_CONFIG };
+      let chatting = false;
+      server.middlewares.use("/api/agents/chat", (req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        if (req.method !== "POST") { res.statusCode = 405; res.end(); return; }
+        if (!config.enabled || chatting) { res.statusCode = 409; res.end(JSON.stringify({ error: chatting ? "Une conversation est déjà en cours. Réessaie dans quelques secondes." : "IA suspendue dans la configuration" })); return; }
+        let body = "";
+        req.on("data", (chunk) => { body += chunk; if (body.length > 140000) req.destroy(); });
+        req.on("end", async () => {
+          if (chatting) { res.statusCode = 409; res.end(JSON.stringify({ error: "Une conversation est déjà en cours" })); return; }
+          chatting = true;
+          const at = Date.now();
+          const settings = { ...config };
+          let agent = "Conversation";
+          try {
+            const input = JSON.parse(body);
+            agent = `Discussion · ${JSON.parse(input.context).person?.name ?? "Habitant"}`;
+            const result = await chat(input, env, settings);
+            stats.record({ at, agent, model: settings.model, status: 200, duration: Date.now() - at, result: { ...result, decisions: [] } });
+            res.end(JSON.stringify(result));
+          } catch (error) {
+            const message = error instanceof Error ? error.message : "Conversation indisponible";
+            stats.record({ at, agent, model: settings.model, status: 502, duration: Date.now() - at, error: message });
+            res.statusCode = 502; res.end(JSON.stringify({ error: message }));
+          } finally { chatting = false; }
+        });
+      });
       server.middlewares.use("/api/ai-config", (req, res) => {
         res.setHeader("Content-Type", "application/json");
         res.setHeader("Cache-Control", "no-store");
@@ -92,7 +119,7 @@ export default defineConfig(({ mode }) => {
         res.setHeader("Content-Type", "application/json");
         res.setHeader("Cache-Control", "no-store");
         if (req.method !== "GET") { res.statusCode = 405; res.end(); return; }
-        res.end(JSON.stringify(stats.snapshot(active, config.model)));
+        res.end(JSON.stringify(stats.snapshot(active + Number(chatting), config.model)));
       });
       server.middlewares.use("/api/agents/decide", (req, res) => {
         res.setHeader("Content-Type", "application/json");

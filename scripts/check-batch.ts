@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { Engine } from "../src/sim/engine";
 import { Intelligence } from "../src/sim/intelligence";
 import { validateBatch } from "../src/shared/intelligence";
+import { DEFAULT_AI_CONFIG } from "../src/shared/aiConfig";
 
 const engine = new Engine(JSON.parse(readFileSync("public/city.json", "utf8")), { residents: 100, tourists: 0, commuters: 0, seed: 2026, startDate: new Date("2026-10-29") });
 let requests = 0;
@@ -13,6 +14,7 @@ globalThis.fetch = async (_url, options) => {
   return Response.json({ decisions: [...contexts].reverse().map((entry: { agentId: number }) => ({ agentId: entry.agentId, action: "continue", thought: `Pensée privée ${entry.agentId}` })) });
 };
 const ai = new Intelligence(engine);
+ai.configure({ ...DEFAULT_AI_CONFIG, agentLimit: 100 });
 ai.tick();
 await new Promise((resolve) => setTimeout(resolve, 20));
 assert.equal(requests, 1);

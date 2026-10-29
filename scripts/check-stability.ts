@@ -15,11 +15,11 @@ const ai = new Intelligence(engine, undefined, () => now);
 ai.configure({ ...DEFAULT_AI_CONFIG, concurrency: 2 });
 ai.tick();
 await Promise.resolve();
-now += 5000;
+now += 6000;
 ai.tick();
 await Promise.resolve();
 assert.equal(calls, 2);
-now += 5000;
+now += 6000;
 ai.tick();
 await Promise.resolve();
 assert.equal(calls, 2, "La limite doit compter les requêtes réelles, pas les personnes");
@@ -31,7 +31,7 @@ globalThis.fetch = async () => { failures++; return Response.json({ error: "Prov
 const failing = new Intelligence(engine, undefined, () => now);
 failing.configure({ ...DEFAULT_AI_CONFIG, concurrency: 1 });
 for (let i = 0; i < 3; i++) {
-  now += 5000;
+  now += 6000;
   failing.tick();
   await new Promise((resolve) => setTimeout(resolve, 10));
 }

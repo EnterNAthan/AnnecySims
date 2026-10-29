@@ -20,7 +20,11 @@ let lastTraffic = -1;
 
 self.onmessage = async (ev: MessageEvent<ToWorker>) => {
   const msg = ev.data;
-  if (msg.type === "aiConfig") { intelligence?.configure(msg.config); return; }
+  if (msg.type === "aiConfig") {
+    intelligence?.configure(msg.config);
+    if (engine) post({ type: "aiPopulation", population: intelligence?.population() ?? { total: engine.agents.length, tracked: [] } });
+    return;
+  }
   if (msg.type === "init") {
     const city: City = await fetch("/city.json").then((r) => r.json());
     const transit = await fetch("/transit.json").then((r) => (r.ok ? r.json() : undefined)).catch(() => undefined);
@@ -29,11 +33,16 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
     const places: Record<string, number> = {};
     for (const [k, list] of engine.places.byKind) places[k] = list.length;
     post({ type: "ready", agents: engine.agents.length, places });
+    post({ type: "aiPopulation", population: intelligence?.population() ?? { total: engine.agents.length, tracked: [] } });
     post({ type: "dayStart", day: engine.day, plan: engine.dayPlan });
     return;
   }
   if (!engine) return;
   switch (msg.type) {
+    case "chat":
+      if (intelligence) void intelligence.converse(msg.id, msg.text, (chat) => post({ type: "chat", chat }));
+      else post({ type: "chat", chat: { id: msg.id, name: "Habitant", messages: [], busy: false, error: "IA désactivée dans cette ville" } });
+      return;
     case "addEvent": {
       const sid = engine.addEvent(msg.proposal);
       post({ type: "planUpdate", plan: engine.dayPlan, added: sid });
