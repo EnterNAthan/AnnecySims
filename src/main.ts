@@ -27,11 +27,12 @@ const pct = (v: number) => `${Math.round(v * 100)} %`;
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 10000);
+  // ≈ 52 000 habitants dans la zone (Annecy et Annecy-le-Vieux), 1 habitant simulé pour 4
+  const residents = Number(params.get("pop") ?? 13000);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
   const tourists = Math.round(residents * 0.04);
   // actifs qui viennent travailler à Annecy depuis les communes voisines (≈ la moitié des emplois du centre)
-  const commuters = Math.round(residents * 0.35);
+  const commuters = Math.round(residents * 0.28);
   const startDate = new Date();
 
   const worker = new Worker(new URL("./sim/worker.ts", import.meta.url), { type: "module" });

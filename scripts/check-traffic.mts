@@ -5,7 +5,7 @@ import { readFileSync } from "node:fs";
 import type { City } from "../src/shared/city";
 import { AGENT_SCALE, Engine } from "../src/sim/engine";
 const city: City = JSON.parse(readFileSync("public/city.json", "utf8"));
-const engine = new Engine(city, { residents: 10000, tourists: 400, commuters: 3500, seed: 2026, startDate: new Date("2026-10-27"), transit: JSON.parse(readFileSync("public/transit.json", "utf8")) });
+const engine = new Engine(city, { residents: 13000, tourists: 520, commuters: 3640, seed: 2026, startDate: new Date("2026-10-27"), transit: JSON.parse(readFileSync("public/transit.json", "utf8")) });
 const g = engine.graph;
 const perRoad = new Map<string, number>();
 const last = new Map<number, number>();

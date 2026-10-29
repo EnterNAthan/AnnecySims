@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Annecy Sim</title>
+    <title>Ane-sims</title>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&display=swap" rel="stylesheet" />
@@ -27,15 +27,17 @@
       </div>
     </header>
     <div id="settings">
-      <button id="history-open" title="Historique des événements et bilans">📚</button>
-      <button id="traffic" title="Fluidité de chaque rue, du vert au rouge">Trafic</button>
-      <button id="bus-lines" title="Lignes de bus Sibra et arrêts">🚌</button>
-      <button id="parkings" title="Parkings et leur remplissage">🅿️</button>
       <label title="Noms des lieux"><input id="labels" type="checkbox" checked /> Lieux</label>
       <label title="Taille des habitants">Taille <input id="agentSize" type="range" min="1" max="4" step="0.5" value="1" /></label>
       <div class="seg" id="viewStyle" title="Style de la vue 3D"></div>
       <button id="zen" title="Masquer l'interface (H)">◐</button>
     </div>
+    <nav id="layers" aria-label="Calques de la carte">
+      <button id="history-open" title="Historique des événements et bilans">📚</button>
+      <button id="traffic" title="Trafic : fluidité de chaque rue, du vert au rouge">🚦</button>
+      <button id="bus-lines" title="Lignes de bus Sibra et arrêts">🚌</button>
+      <button id="parkings" title="Parkings et leur remplissage">🅿️</button>
+    </nav>
     <aside id="live" class="panel">
       <div class="panel-title">En ce moment</div>
       <div id="counts"></div>

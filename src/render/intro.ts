@@ -6,6 +6,8 @@ import type { World } from "./scene";
 const DURATION = 4.6; // s
 const TOP_HEIGHT = 26000; // m, avec un champ très étroit : presque orthographique
 const TOP_FOV = 9;
+/** rotation (rad) pendant la descente */
+const TWIST = 1.4;
 
 const smooth = (a: number, b: number, x: number) => {
   const t = Math.min(1, Math.max(0, (x - a) / (b - a)));
@@ -60,7 +62,7 @@ export class Intro {
 
     this.overlay = document.createElement("div");
     this.overlay.id = "intro";
-    this.overlay.innerHTML = `<div class="intro-title">Annecy</div>`;
+    this.overlay.innerHTML = `<div class="intro-title">Ane-sims</div>`;
     document.body.appendChild(this.overlay);
   }
 
@@ -76,7 +78,9 @@ export class Intro {
     this.from.target.copy(this.to.target);
     camera.fov = TOP_FOV;
     camera.updateProjectionMatrix();
-    camera.position.set(this.from.target.x, TOP_HEIGHT, this.from.target.z + 0.01);
+    // même orientation que la première image de la plongée : pas de saut au clic
+    const end = new THREE.Spherical().setFromVector3(this.to.position.clone().sub(this.to.target));
+    camera.position.copy(this.from.target).add(new THREE.Vector3().setFromSpherical(new THREE.Spherical(TOP_HEIGHT, 0.0001, end.theta + TWIST)));
     controls.target.copy(this.from.target);
     this.center.value.set(this.to.target.x, this.to.target.z);
     this.reveal.value = -400;
@@ -108,7 +112,7 @@ export class Intro {
     const radius = view / halfTan(fov);
     const phi = THREE.MathUtils.lerp(0.0001, end.phi, smooth(0.15, 1, this.t));
     // un quart de tour pendant la descente
-    const theta = end.theta + (1 - smooth(0, 1, this.t)) * 1.4;
+    const theta = end.theta + (1 - smooth(0, 1, this.t)) * TWIST;
     camera.position.copy(target).add(new THREE.Vector3().setFromSpherical(new THREE.Spherical(radius, phi, theta)));
     camera.fov = fov;
     camera.updateProjectionMatrix();

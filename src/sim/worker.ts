@@ -57,7 +57,9 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
         post({ type: "dayStart", day: engine.day, plan: engine.dayPlan });
         flush();
       }
-      engine.advanceTo(msg.minute);
+      // rattrapage par tranches (démarrage en milieu de journée) : une image toutes les 45 min simulées
+      // plutôt qu'un long silence pendant que la nuit et la matinée se calculent
+      engine.advanceTo(Math.min(msg.minute, engine.minute + 45));
       const out = new Float32Array(msg.buffer);
       const count = engine.snapshot(out);
       const thoughts = engine.thoughts.slice(-40);
