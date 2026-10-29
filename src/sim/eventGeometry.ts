@@ -1,6 +1,7 @@
 // Géométrie d'un événement du joueur : rues fermées, parcours d'un cortège, zone touchée.
 import { ROAD_FLAGS, type City } from "../shared/city";
-import { EVENT_SPECS, type EventProposal } from "../shared/catalog";
+import { EVENT_SPECS, isProcession, traitsOf, type EventProposal } from "../shared/catalog";
+import { crowdRadius } from "./venue";
 import { LOCATIONS, locationXZ } from "../shared/locations";
 import { roadsNamed } from "../shared/streets";
 import { Graph, Mode } from "./graph";
@@ -100,13 +101,15 @@ function buildRoute(city: City, graph: Graph, steps: string[]): RoutePath | null
 
 export function eventGeometry(city: City, graph: Graph, p: EventProposal): EventGeometry {
   const spec = EVENT_SPECS[p.kind];
+  const traits = traitsOf(p);
   const intensity = Math.max(1, Math.min(3, p.intensity));
-  const radius = spec.radius * [0, 0.6, 1, 1.7][intensity];
+  // un grand rassemblement occupe la place de son public
+  const radius = Math.max(spec.radius * [0, 0.6, 1, 1.7][intensity], traits.attendance > 0 && traits.needs === "place" ? crowdRadius(traits.attendance) + 45 : 0);
   // une vague ou une crue frappe la rive, pas le milieu du lac
   const onShore = (p.kind === "tsunami" || p.kind === "inondation") && p.location === "Lac d'Annecy";
   let [x, z] = locationXZ(onShore ? "Le Pâquier" : p.location);
 
-  if (spec.needs === "streets" && p.streets.length) {
+  if (traits.needs === "streets" && p.streets.length) {
     const roads = roadsNamed(city, p.streets);
     const carRoads = roads.filter((r) => city.roads[r].f & ROAD_FLAGS.CAR);
     const cells = new Set<number>();
@@ -117,21 +120,24 @@ export function eventGeometry(city: City, graph: Graph, p: EventProposal): Event
       xs.forEach((v, i) => { sx += v; sz += zs[i]; n++; });
     }
     if (n) [x, z] = [sx / n, sz / n];
-    return { x, z, radius, closedRoads: spec.closesRoads ? carRoads : [], path: null, zone: new Zone(x, z, radius, cells) };
+    return { x, z, radius, closedRoads: traits.closesRoads ? carRoads : [], path: null, zone: new Zone(x, z, radius, cells) };
   }
 
-  if (spec.needs === "route") {
+  if (traits.needs === "route") {
     const path = buildRoute(city, graph, p.route);
     if (path) {
       // la course ferme tout son parcours ; la manifestation ferme au passage du cortège (voir Engine)
-      const closed = p.kind === "marathon" ? [...new Set(path.roads.filter((r) => r >= 0))] : [];
+      // une course ferme tout son parcours ; un défilé ferme au passage (voir Engine)
+      const closed = !isProcession(p.kind, traits.nature) && traits.closesRoads ? [...new Set(path.roads.filter((r) => r >= 0))] : [];
       return { x: path.xs[0], z: path.zs[0], radius, closedRoads: closed, path, zone: new Zone(path.xs[0], path.zs[0], radius, corridor(path.xs, path.zs)) };
     }
   }
 
   // événement localisé : rues de la zone fermées pour les phénomènes dangereux
   const closedRoads: number[] = [];
-  if (spec.closesRoads) {
+  // rues nommées fermées autour d'un rassemblement (quai, parking…)
+  if (traits.closesRoads && p.streets.length) closedRoads.push(...roadsNamed(city, p.streets).filter((r) => city.roads[r].f & ROAD_FLAGS.CAR));
+  else if (traits.closesRoads) {
     city.roads.forEach((r, i) => {
       if (!(r.f & ROAD_FLAGS.CAR)) return;
       if (r.n.some((n) => Math.hypot(city.nodes[2 * n] - x, city.nodes[2 * n + 1] - z) < Math.max(radius, 40))) closedRoads.push(i);

@@ -2,7 +2,8 @@
 // Claude est appelé via Claude Code (`claude -p`) ; sans lui, on retombe sur des règles.
 import { readFileSync } from "node:fs";
 import { z } from "zod";
-import { EVENT_KINDS, EVENT_SPECS, type EventProposal } from "../src/shared/catalog";
+import { EFFECTS, EVENT_KINDS, EVENT_SPECS, MOTIONS, NATURES, PLACEMENTS, PROPS, PROP_LABEL, SHAPES, type EventProposal } from "../src/shared/catalog";
+import { assetCatalog, findAsset } from "./assets";
 import { LOCATIONS } from "../src/shared/locations";
 import { DEFAULT_ROUTE, interpretLocally } from "../src/shared/localInterpreter";
 import { matchStreet, streetNames } from "../src/shared/streets";
@@ -33,24 +34,75 @@ function proposalSchema(extreme: boolean) {
     description: z.string().describe("une ou deux phrases concrètes sur ce qui va se passer et pour qui"),
     question: z.string().describe("question de confirmation au joueur, tutoiement, commence par l'emoji de l'événement"),
     note: z.string().describe("si la demande a été rapprochée d'une action voisine ou comporte une ambiguïté : explication courte ; sinon vide"),
+    attendance: z.number().int().min(0).max(200000).describe("fréquentation attendue PAR JOUR (personnes réelles) ; 0 si ce n'est pas un rassemblement"),
+    ticketPrice: z.number().min(0).max(500).describe("prix d'entrée en €, 0 si gratuit"),
+    setup: z.array(z.enum(PROPS)).describe("décor 3D installé sur place"),
+    audience: z.enum(["tous", "jeunes", "familles", "seniors"]),
+    shuttles: z.boolean().describe("navettes gratuites depuis la gare et les parkings relais"),
+    icon: z.string().describe("un emoji qui représente l'événement"),
+    label: z.string().describe("nom générique court du type d'événement (« Festival de musique », « Tournoi de beach-volley »…)"),
+    nature: z.enum(NATURES),
+    danger: z.boolean().describe("true seulement si les gens doivent fuir (sinistre)"),
+    closesRoads: z.boolean().describe("des rues sont fermées aux voitures (rues listées, parcours, ou abords du site)"),
+    mood: z.number().int().min(-2).max(2).describe("effet sur l'humeur des riverains : -2 nuisance forte … +2 très apprécié"),
+    model: z
+      .object({
+        parts: z.array(z.object({
+          shape: z.enum(SHAPES),
+          x: z.number(), y: z.number(), z: z.number(),
+          sx: z.number().min(0.1).max(300), sy: z.number().min(0.1).max(300), sz: z.number().min(0.1).max(300),
+          rx: z.number(), ry: z.number(), rz: z.number(),
+          color: z.string().describe("#rrggbb"),
+          glow: z.number().min(0).max(1),
+        })).max(40),
+        motion: z.enum(MOTIONS),
+        altitude: z.number().min(0).max(400),
+        orbit: z.number().min(0).max(800),
+        effects: z.array(z.enum(EFFECTS)),
+      })
+      .nullable()
+      .describe("modèle 3D en primitives, SEULEMENT si aucun modèle de la banque ne représente la chose principale ; null sinon"),
+    assets: z.array(z.object({
+      id: z.string().describe("identifiant exact pack/nom pris dans la banque de modèles"),
+      count: z.number().int().min(1).max(30),
+      size: z.number().min(0.2).max(400).describe("plus grande dimension en mètres, à l'échelle réelle"),
+      placement: z.enum(PLACEMENTS),
+      motion: z.enum(MOTIONS),
+      altitude: z.number().min(0).max(400),
+    })).max(10).describe("objets de la banque à montrer sur place pour rendre la scène lisible"),
   });
 }
 
 function interpretSystem(extreme: boolean) {
   const kinds = EVENT_KINDS.filter((k) => extreme || !EVENT_SPECS[k].extreme);
-  return `Tu es le service des opérations de la ville d'Annecy dans une simulation urbaine réaliste. Le joueur (le maire ou un agent municipal) décrit en français, parfois familièrement, une décision ou une situation. Tu la traduis en UN événement précis du catalogue.
+  const fantasy = extreme
+    ? "Les scénarios extrêmes sont ACTIVÉS : les demandes fantastiques ou catastrophiques (créatures, phénomènes surnaturels, catastrophes) sont acceptées ; traite-les avec le même sérieux, comme si c'était réel."
+    : "Les scénarios extrêmes sont DÉSACTIVÉS : si la demande est fantastique ou catastrophique (créature, phénomène surnaturel, catastrophe majeure), réponds understood=false et explique dans note qu'il faut activer l'interrupteur « Scénarios extrêmes ».";
+  return `${fantasy}
+
+Tu es le service des opérations de la ville d'Annecy dans une simulation urbaine réaliste. Le joueur (le maire ou un agent municipal) décrit en français, parfois familièrement, une décision ou une situation. Tu la traduis en UN événement précis du catalogue.
 
 Exigences :
 - Sois factuel et réaliste, comme un arrêté municipal ou une alerte trafic. Pas d'emphase.
 - Fermeture, travaux, piétonnisation, accident : remplis "streets" avec les noms EXACTS de la liste des rues ci-dessous (une désignation partielle comme « avenue de Genève » ou « rue royale » doit devenir le nom exact). Si une rue est introuvable, dis-le dans "note".
 - Manifestation, course : remplis "route" avec 2 à 5 étapes (lieux ou rues de la liste) formant un parcours plausible. Par défaut, une manifestation part de la Gare d'Annecy vers l'Hôtel de Ville ; une course fait le tour des quais du Pâquier aux Marquisats.
 - Interprète les durées (« 2 semaines » = 14 jours, « ce week-end » = 2 jours) et l'heure (relative à l'heure actuelle donnée). Des travaux ont lieu en journée (07:30, environ 10 h par jour) ; une fermeture administrative dure toute la journée (startTime vide, 1440 min).
+- Tout événement est possible. Si aucun type du catalogue ne convient vraiment, utilise "evenement" et décris-le avec ses caractéristiques (icon, label, nature, attendance, setup, closesRoads, route ou streets…). Ne force jamais une demande festive vers un type de sinistre : un festival, une fête, un salon sont des événements positifs.
+- Donne des chiffres réalistes pour Annecy : un grand festival de musique (type Musilac) attire 20 000 à 40 000 personnes par jour avec billet autour de 50-70 € ; une fête foraine quelques milliers ; un marché de Noël 3 000 à 8 000 ; un cinéma en plein air 1 000 à 3 000. Respecte les chiffres donnés par le joueur.
+- Décor : choisis les éléments cohérents (scène et écrans pour un concert, chalets pour un marché de Noël, tribunes et arche pour du sport…). Éléments possibles : ${PROPS.map((p) => `${p} (${PROP_LABEL[p]})`).join(", ")}.
+- Visualisation (assets) : rends TOUT événement visible avec 1 à 8 objets de la banque de modèles ci-dessous, à leur taille réelle : par exemple un accident = 2 voitures, débris, cônes, voiture de police, ambulance ; un incendie = camion de pompiers, ambulance ; une ferme pédagogique = vaches, chevaux, clôtures ; un salon nautique = bateaux sur le lac. Placement : centre (la chose principale), cercle (autour), ligne (alignés le long du lieu), disperse (éparpillés), ciel (en vol, avec altitude), lac (sur l'eau). Mouvement : fixe, flotte, tourne, orbite (vole en rond au-dessus), pulse.
+- Modèle 3D (model) : SEULEMENT si la chose principale n'existe pas dans la banque : pour toute chose physique qui n'a pas de décor prévu (un dragon, un canard géant, une montgolfière, un vaisseau…), compose-la avec 8 à 40 primitives à l'échelle réelle en mètres (y = hauteur depuis le sol du modèle, l'avant vers +z), couleurs réalistes, glow pour ce qui brille (yeux, feu, lumières). Choisis le mouvement (orbite pour ce qui vole autour de la zone, flotte pour ce qui plane ou flotte sur l'eau, tourne, pulse, fixe), l'altitude, le rayon d'orbite et les effets (feu, fumee, lumiere, etincelles). Sinon null.
+- Une chose dangereuse (créature hostile, sinistre) : danger=true, nature "danger", les rues de la zone fermées ; une curiosité inoffensive attire au contraire les badauds (attendance > 0).
+- mood : un grand événement nocturne et bruyant gêne les riverains (-1), une fête de quartier familiale est appréciée (+1).
 - Si la demande ne correspond pas exactement au catalogue, choisis l'action la plus proche et explique-le dans "note".
 
 Catalogue :
 ${kinds.map((k) => `- ${k} (${EVENT_SPECS[k].icon} ${EVENT_SPECS[k].label}, ${EVENT_SPECS[k].duration} min par défaut, début ${EVENT_SPECS[k].defaultStart || "immédiat"}) : ${EVENT_SPECS[k].about}`).join("\n")}
 
 Lieux : ${LOCATION_NAMES.join(", ")}.
+
+Banque de modèles 3D (identifiant = pack/nom) :
+${assetCatalog()}
 
 Rues d'Annecy (noms OpenStreetMap, des plus longues aux plus courtes) :
 ${allStreets().slice(0, 450).join(" | ")}`;
@@ -66,10 +118,14 @@ function resolveNames(p: EventProposal): EventProposal {
     .filter(Boolean);
   const spec = EVENT_SPECS[p.kind];
   const note = [p.note, missing.length ? `Introuvable sur la carte : ${missing.join(", ")}.` : ""].filter(Boolean).join(" ");
+  // objets de la banque : identifiant exact, sinon le plus proche par mots-clés
+  const assets = (p.assets ?? []).map((a) => ({ ...a, query: a.query ?? a.id, id: findAsset(a.id)?.id ?? "" }));
   return {
     ...p,
-    streets: spec.needs === "streets" ? streetsOut : [],
-    route: spec.needs === "route" ? (route.length >= 2 ? route : DEFAULT_ROUTE[p.kind] ?? []) : [],
+    assets,
+    // les rues servent aussi aux abords fermés d'un rassemblement ; un parcours peut accompagner un événement libre
+    streets: streetsOut,
+    route: route.length >= 2 ? route : spec.needs === "route" ? DEFAULT_ROUTE[p.kind] ?? [] : [],
     note,
   };
 }
@@ -150,5 +206,39 @@ export async function analyze(ev: EventSummary, before: Kpis, after: Kpis, cohor
   } catch (err) {
     console.warn("[analyse] repli sur les règles :", (err as Error).message);
     return localAnalysis(ev, before, after, cohorts, responses);
+  }
+}
+
+// ---------- Bilan d'un événement terminé ----------
+
+const BilanSchema = z.object({
+  verdict: z.enum(["réussite", "mitigé", "à revoir"]),
+  headline: z.string().describe("titre factuel de 12 mots maximum avec le chiffre clé"),
+  summary: z.string().describe("3 phrases maximum, 70 mots maximum, chiffrées"),
+  positives: z.array(z.string()).max(3).describe("points positifs, 8 mots maximum chacun"),
+  negatives: z.array(z.string()).max(3).describe("points négatifs, 8 mots maximum chacun"),
+  recommendation: z.string().describe("ce qu'il faudrait changer pour la prochaine édition, 35 mots maximum"),
+});
+export type FinalReport = z.infer<typeof BilanSchema> & { source: "claude" | "local" };
+
+const BILAN_SYSTEM = `Tu es le service événementiel de la ville d'Annecy. À partir du bilan mesuré d'un événement (fréquentation, billetterie, dépenses sur place, chiffre d'affaires des commerces voisins comparé à un jour normal, déplacements en voiture des visiteurs, CO₂, plaintes de riverains), rédige un bilan court, honnête et chiffré pour le maire. N'invente aucun chiffre.`;
+
+export async function finalReport(ev: EventSummary, bilan: Record<string, number>): Promise<FinalReport> {
+  try {
+    const out = await askClaude(BILAN_SYSTEM, JSON.stringify({ evenement: ev, bilan }), BilanSchema);
+    return { ...out, source: "claude" };
+  } catch (err) {
+    console.warn("[bilan] repli sur les règles :", (err as Error).message);
+    const money = bilan.ticketRevenue + bilan.onsiteSpend;
+    const shops = bilan.zoneRevenue - bilan.zoneRevenueBefore;
+    return {
+      verdict: bilan.complaints > bilan.attendees * 0.05 ? "mitigé" : "réussite",
+      headline: `${ev.title} : ${Math.round(bilan.attendees).toLocaleString("fr-FR")} personnes`,
+      summary: `${Math.round(bilan.outsiders).toLocaleString("fr-FR")} visiteurs extérieurs, ${Math.round(money).toLocaleString("fr-FR")} € de billetterie et de dépenses sur place, commerces voisins ${shops >= 0 ? "+" : ""}${Math.round(shops).toLocaleString("fr-FR")} €. ${Math.round(bilan.visitorCarKm).toLocaleString("fr-FR")} km parcourus en voiture par les visiteurs (${bilan.co2Tonnes} t de CO₂).`,
+      positives: [`pic à ${Math.round(bilan.peak).toLocaleString("fr-FR")} personnes`],
+      negatives: bilan.complaints ? [`${bilan.complaints} plaintes de riverains`] : [],
+      recommendation: bilan.visitorCarTrips > bilan.outsiders * 0.5 ? "Mettre en place des navettes depuis la gare et les parkings relais." : "Reconduire le dispositif.",
+      source: "local",
+    };
   }
 }

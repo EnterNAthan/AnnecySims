@@ -39,6 +39,8 @@ export interface CityEvent {
   days?: number;
   /** rues nommées concernées */
   streets?: string[];
+  /** comportement résolu (événements du joueur) : icône, nature, fréquentation, décor… */
+  traits?: import("../shared/catalog").EventTraits;
   /** parcours (cortège, course), aplati [x0, z0, x1, z1…], et sa longueur en m */
   path?: number[];
   pathLength?: number;

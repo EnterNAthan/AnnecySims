@@ -1,5 +1,5 @@
 // Barre de commande en langage naturel : demande → interprétation (Claude) → aperçu et confirmation → événement.
-import { EVENT_SPECS, type EventProposal } from "../shared/catalog";
+import { EVENT_SPECS, NATURES, PROPS, PROP_LABEL, type EventProposal, type Prop } from "../shared/catalog";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 
@@ -98,11 +98,15 @@ export function setupCommandBar(ctx: CommandContext, launch: (p: EventProposal) 
     pending = p;
     ctx.preview(p);
     const spec = EVENT_SPECS[p.kind];
+    const icon = p.icon || spec.icon;
     const dots = "●".repeat(p.intensity) + "○".repeat(3 - p.intensity);
     const where = p.streets.length ? p.streets.join(", ") : p.route.length ? p.route.join(" → ") : p.location;
+    const num = (name: string, label: string, value: number, step = 1, min = 0) =>
+      `<label>${label}<input type="number" data-param="${name}" value="${value}" step="${step}" min="${min}" /></label>`;
     show(`
       <span class="source">${p.source === "claude" ? "✨ interprété par Claude" : "🔤 mots-clés (sans Claude)"}</span>
-      <h3>${spec.icon} ${p.title}</h3>
+      <h3>${icon} ${p.title}</h3>
+      <div class="kind-line">${p.label || spec.label}${p.nature ? ` · ${p.nature}` : ""}${p.danger ? " · ⚠️ dangereux" : ""}${p.model ? ` · 🧩 modèle 3D sur mesure (${p.model.parts.length} pièces)` : ""}</div>
       <div>${p.description}</div>
       <div class="details">
         <span>📍 ${where}</span>
@@ -110,6 +114,23 @@ export function setupCommandBar(ctx: CommandContext, launch: (p: EventProposal) 
         <span>intensité ${dots}</span>
       </div>
       ${p.note ? `<div class="note">${p.note}</div>` : ""}
+      <details class="params">
+        <summary>⚙️ Paramètres (modifiables)</summary>
+        <div class="param-grid">
+          ${num("attendance", "Fréquentation / jour", p.attendance, 100)}
+          ${num("ticketPrice", "Billet (€)", p.ticketPrice, 1)}
+          ${num("dayOffset", "Dans (jours)", p.dayOffset)}
+          ${num("days", "Nombre de jours", p.days, 1, 1)}
+          <label>Début<input type="time" data-param="startTime" value="${p.startTime}" /></label>
+          ${num("durationMinutes", "Durée (min)", p.durationMinutes, 15, 10)}
+          <label>Public<select data-param="audience">${["tous", "jeunes", "familles", "seniors"].map((a) => `<option ${a === p.audience ? "selected" : ""}>${a}</option>`).join("")}</select></label>
+          <label>Nature<select data-param="nature"><option value=""></option>${NATURES.map((n) => `<option ${n === p.nature ? "selected" : ""}>${n}</option>`).join("")}</select></label>
+          <label class="check"><input type="checkbox" data-param="shuttles" ${p.shuttles ? "checked" : ""} /> 🚌 Navettes</label>
+          <label class="check"><input type="checkbox" data-param="closesRoads" ${p.closesRoads ? "checked" : ""} /> ⛔ Rues fermées</label>
+          <label class="check"><input type="checkbox" data-param="danger" ${p.danger ? "checked" : ""} /> ⚠️ Dangereux</label>
+        </div>
+        <div class="props">${PROPS.map((x) => `<label><input type="checkbox" data-prop="${x}" ${p.setup.includes(x) ? "checked" : ""} />${PROP_LABEL[x]}</label>`).join("")}</div>
+      </details>
       <div class="question">${p.question}</div>
       <div class="proposal-actions">
         <button data-act="yes">✅ Confirmer</button>
@@ -118,11 +139,23 @@ export function setupCommandBar(ctx: CommandContext, launch: (p: EventProposal) 
       </div>`);
   };
 
+  // les champs de la carte ne doivent pas piloter la caméra
+  card.addEventListener("keydown", (e) => e.stopPropagation());
   card.addEventListener("click", (e) => {
     const act = (e.target as HTMLElement).dataset.act;
     if (act === "yes" && pending) {
+      // les paramètres retouchés à la main l'emportent sur l'interprétation
+      const p = pending as unknown as Record<string, unknown>;
+      card.querySelectorAll<HTMLInputElement | HTMLSelectElement>("[data-param]").forEach((el) => {
+        const k = el.dataset.param!;
+        if (el instanceof HTMLInputElement && el.type === "checkbox") p[k] = el.checked;
+        else if (el instanceof HTMLInputElement && el.type === "number") p[k] = Math.max(0, Number(el.value) || 0);
+        else p[k] = el.value;
+      });
+      pending.setup = [...card.querySelectorAll<HTMLInputElement>("[data-prop]:checked")].map((el) => el.dataset.prop as Prop);
+      pending.days = Math.max(1, pending.days);
       launch(pending);
-      show(`${EVENT_SPECS[pending.kind].icon} <b>Décision enregistrée.</b> Les habitants concernés vont s'organiser ; suis l'impact dans le panneau « Décisions ».`);
+      show(`${pending.icon || EVENT_SPECS[pending.kind].icon} <b>Décision enregistrée.</b> Les habitants concernés vont s'organiser ; suis l'impact dans le panneau « Décisions ».`);
       pending = null;
       ctx.preview(null);
       input.value = "";

@@ -94,6 +94,31 @@ export interface Thought {
   voice?: string;
 }
 
+/** Visiteurs venus de l'extérieur pour les grands événements (agents en réserve). */
+export const VISITOR_POOL = 5000;
+
+/** Bilan d'un événement à sa clôture (chiffres en personnes réelles et en €). */
+export interface EventBilan {
+  /** personnes venues au moins une fois, dont habitants et visiteurs extérieurs */
+  attendees: number;
+  residents: number;
+  outsiders: number;
+  peak: number;
+  ticketRevenue: number;
+  /** dépenses sur le site (boissons, restauration) */
+  onsiteSpend: number;
+  /** chiffre d'affaires des commerces de la zone pendant l'événement, et sans l'événement */
+  zoneRevenue: number;
+  zoneRevenueBefore: number;
+  visitorCarTrips: number;
+  visitorCarKm: number;
+  co2Tonnes: number;
+  /** temps moyen pour venir, visiteurs extérieurs (min) */
+  visitorTravel: number;
+  complaints: number;
+  rerouted: number;
+}
+
 /** Ce qu'un événement change dans la ville : maintenant, comparé à la même heure sans l'événement. */
 export interface Impact {
   sid: number;
@@ -109,6 +134,10 @@ export interface Impact {
   rerouted: number;
   /** personnes présentes à l'événement (manifestants, coureurs, visiteurs) */
   participants: number;
+  /** présents sur place toutes les 10 minutes depuis le début */
+  timeline: number[];
+  /** bilan, une fois l'événement terminé */
+  bilan: EventBilan | null;
 }
 
 /** Aperçu d'un événement avant confirmation : rues et parcours concernés. */
@@ -124,7 +153,8 @@ export interface Preview {
 export type EngineMessage =
   | { type: "cohortRequest"; sid: number; event: EventSummary; cohorts: CohortStat[] }
   | { type: "analysisRequest"; sid: number; event: EventSummary; before: Kpis; after: Kpis; reference: string }
-  | { type: "impact"; impact: Impact };
+  | { type: "impact"; impact: Impact }
+  | { type: "bilanRequest"; sid: number; event: EventSummary; bilan: EventBilan };
 
 export type ToWorker =
   | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string }

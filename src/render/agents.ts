@@ -265,7 +265,8 @@ export class AgentsView {
         this.walkers[far].setMatrixAt(k, this.m);
         this.walkers[far].setColorAt(k, this.profileColors[profile]);
         // marche, course (grande foulée), promenade du chien (pas tranquille), à l'arrêt (bras seulement)
-        if (!far) aw.setXY(k, id * 1.7, mode === 4 ? 0.95 : mode === 1 ? 0.55 : mode === 5 ? 0.4 : 0.06);
+        // mode 6 : spectateur face à la scène, qui danse
+        if (!far) aw.setXY(k, id * 1.7, mode === 4 ? 0.95 : mode === 1 ? 0.55 : mode === 5 ? 0.4 : mode === 6 ? 0.3 : 0.06);
       }
     }
     // n'envoie au GPU que la partie utilisée des buffers, pas toute la capacité

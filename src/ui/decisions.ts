@@ -2,7 +2,17 @@
 // (Claude, porte-parole par profil × quartier), l'impact mesuré et la note d'analyse.
 import { EVENT_SPECS } from "../shared/catalog";
 import type { Analysis, CohortResponse, CohortStat, EventSummary, Kpis } from "../shared/advisors";
-import type { Impact } from "../sim/protocol";
+import type { EventBilan, Impact } from "../sim/protocol";
+
+interface FinalReport {
+  verdict: "réussite" | "mitigé" | "à revoir";
+  headline: string;
+  summary: string;
+  positives: string[];
+  negatives: string[];
+  recommendation: string;
+  source: "claude" | "local";
+}
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const pct = (v: number) => `${Math.round(v * 100)} %`;
@@ -18,6 +28,9 @@ interface Decision {
   impact: Impact | null;
   analysis: Analysis | null;
   analysing: boolean;
+  bilan: EventBilan | null;
+  report: FinalReport | null;
+  reporting: boolean;
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -35,6 +48,7 @@ export class DecisionsPanel {
       cohortPlan(sid: number, responses: CohortResponse[]): void;
       cancel(sid: number): void;
       goTo(sid: number): void;
+      follow(sid: number): void;
     },
   ) {
     this.el.addEventListener("click", (e) => {
@@ -46,12 +60,13 @@ export class DecisionsPanel {
         this.decisions.delete(sid);
         this.render();
       } else if (t.dataset.act === "goto") this.send.goTo(sid);
+      else if (t.dataset.act === "follow") this.send.follow(sid);
     });
   }
 
   /** Nouvelle décision : on demande à Claude comment chaque groupe concerné va s'organiser. */
   request(sid: number, event: EventSummary, cohorts: CohortStat[]) {
-    const d: Decision = { sid, event, cohorts, responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false };
+    const d: Decision = { sid, event, cohorts, responses: null, source: null, ready: Promise.resolve(), impact: null, analysis: null, analysing: false, bilan: null, report: null, reporting: false };
     this.decisions.set(sid, d);
     if (cohorts.length) {
       d.ready = post<{ responses: CohortResponse[]; source: "claude" | "local" }>("/api/cohorts", { event, cohorts })
@@ -70,6 +85,22 @@ export class DecisionsPanel {
     const d = this.decisions.get(i.sid);
     if (!d) return;
     d.impact = i;
+    this.render();
+  }
+
+  /** Événement terminé : chiffres du bilan, puis note de Claude pour la prochaine édition. */
+  async bilan(sid: number, event: EventSummary, bilan: EventBilan) {
+    const d = this.decisions.get(sid);
+    if (!d) return;
+    d.bilan = bilan;
+    d.reporting = true;
+    this.render();
+    try {
+      d.report = await post<FinalReport>("/api/bilan", { event, bilan });
+    } catch {
+      /* facultatif */
+    }
+    d.reporting = false;
     this.render();
   }
 
@@ -97,21 +128,74 @@ export class DecisionsPanel {
 
   private card(d: Decision): string {
     const spec = EVENT_SPECS[d.event.kind];
+    const icon = d.event.traits?.icon ?? spec.icon;
     const i = d.impact;
     const status = !i ? `<div class="muted small">⏳ Programmé ${d.event.when}. L'impact s'affichera après le début.</div>` : "";
     return `
       <details class="decision" open>
         <summary>
-          <span class="d-icon">${spec.icon}</span>
+          <span class="d-icon">${icon}</span>
           <span class="d-title"><b>${d.event.title}</b><small>${i ? (i.active ? "🔴 en cours" : "✔ terminé") : d.event.when}</small></span>
+          <button data-act="follow" data-sid="${d.sid}" title="Suivre l'événement avec la caméra">🎥</button>
           <button data-act="goto" data-sid="${d.sid}" title="Voir sur la carte">📍</button>
           <button data-act="cancel" data-sid="${d.sid}" title="Annuler la décision">✕</button>
         </summary>
         ${status}
+        ${this.params(d)}
+        ${this.bilanBlock(d)}
+        ${i && i.timeline.length > 1 ? this.attendance(i) : ""}
         ${i ? this.impactTable(i) : ""}
         ${this.voices(d)}
         ${this.analysisBlock(d)}
       </details>`;
+  }
+
+  /** Paramètres principaux de l'événement, en une ligne. */
+  private params(d: Decision) {
+    const t = d.event.traits;
+    if (!t || (!t.attendance && !t.setup.length)) return "";
+    const bits = [
+      t.attendance ? `👥 ${fmt(t.attendance)} attendus / jour` : "",
+      t.attendance ? (t.ticket ? `🎟️ ${t.ticket} €` : "🎟️ gratuit") : "",
+      t.shuttles ? "🚌 navettes" : "",
+      t.audience !== "tous" ? `public : ${t.audience}` : "",
+    ].filter(Boolean);
+    return `<div class="chips-row">${bits.map((b) => `<span>${b}</span>`).join("")}</div>`;
+  }
+
+  /** Courbe de fréquentation depuis le début (toutes les 10 min). */
+  private attendance(i: Impact) {
+    const pts = i.timeline, max = Math.max(1, ...pts), w = 300, h = 46;
+    const path = pts.map((v, k) => `${k ? "L" : "M"}${((k / Math.max(1, pts.length - 1)) * w).toFixed(1)},${(h - (v / max) * (h - 4)).toFixed(1)}`).join(" ");
+    return `<div class="sub">👥 Fréquentation <span class="badge">${fmt(pts[pts.length - 1])} présents · pic ${fmt(max)}</span></div>
+      <svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${path} L${w},${h} L0,${h} Z" class="area"/><path d="${path}" class="line"/></svg>`;
+  }
+
+  private bilanBlock(d: Decision) {
+    const b = d.bilan;
+    if (!b) return "";
+    const r = d.report;
+    const shops = b.zoneRevenue - b.zoneRevenueBefore;
+    const cell = (label: string, value: string) => `<div class="kpi"><small>${label}</small><b>${value}</b></div>`;
+    return `<div class="bilan">
+      <div class="sub">📊 Bilan de l'événement ${r ? `<span class="badge verdict ${r.verdict === "réussite" ? "good" : r.verdict === "mitigé" ? "flat" : "bad"}">${r.verdict}</span>` : ""}</div>
+      <div class="kpis">
+        ${cell("Participants", fmt(b.attendees))}
+        ${cell("Dont extérieurs", fmt(b.outsiders))}
+        ${cell("Pic de foule", fmt(b.peak))}
+        ${cell("Billetterie", `${fmt(b.ticketRevenue / 1000)} k€`)}
+        ${cell("Dépenses sur place", `${fmt(b.onsiteSpend / 1000)} k€`)}
+        ${cell("Commerces voisins", `${shops >= 0 ? "+" : ""}${fmt(shops / 1000)} k€`)}
+        ${cell("Km en voiture (visiteurs)", fmt(b.visitorCarKm))}
+        ${cell("CO₂", `${b.co2Tonnes} t`)}
+        ${cell("Plaintes riverains", fmt(b.complaints))}
+      </div>
+      ${d.reporting ? `<div class="muted small"><span class="spinner"></span> Claude rédige le bilan…</div>` : ""}
+      ${r ? `<b>${r.headline}</b><p>${r.summary}</p>
+        ${r.positives.length ? `<div class="small">👍 ${r.positives.join(" · ")}</div>` : ""}
+        ${r.negatives.length ? `<div class="small">👎 ${r.negatives.join(" · ")}</div>` : ""}
+        <div class="reco">💡 Prochaine édition : ${r.recommendation}</div>` : ""}
+    </div>`;
   }
 
   private impactTable(i: Impact) {

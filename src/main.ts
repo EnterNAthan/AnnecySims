@@ -15,7 +15,7 @@ import { PreviewLayer, TrafficLayer } from "./render/traffic";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
 import { PROFILES, PROFILE_COLOR, PROFILE_LABEL } from "./sim/population";
-import { FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type Thought, type ToWorker } from "./sim/protocol";
+import { VISITOR_POOL, FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type Thought, type ToWorker } from "./sim/protocol";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const fmt = (n: number) => Math.round(n).toLocaleString("fr-FR");
@@ -44,7 +44,8 @@ async function main() {
   world.scene.add(...cityMeshes, buildWater(city), buildLandmarks());
   setupViewStyle(world, cityMeshes, params.get("view"));
 
-  const total = residents + tourists + commuters;
+  // les visiteurs d'un jour (grands événements) s'ajoutent aux habitants
+  const total = residents + tourists + commuters + VISITOR_POOL;
   const agents = new AgentsView(total);
   const events = new EventsView(city, world);
   world.scene.add(agents.group, events.group);
@@ -139,7 +140,18 @@ async function main() {
       const ev = currentPlan?.events.find((e) => e.sid === sid);
       if (ev) lookAt(ev.x, ev.z);
     },
+    follow: (sid) => {
+      followedEvent = sid;
+      const ev = currentPlan?.events.find((e) => e.sid === sid);
+      if (!ev) return;
+      lookAt(ev.x, ev.z);
+      // vue rapprochée en plongée sur le site
+      world.camera.position.set(ev.x - 260, 230, ev.z + 300);
+    },
   });
+  /** événement suivi par la caméra (jusqu'à ce que l'on déplace la carte) */
+  let followedEvent = -1;
+  world.controls.addEventListener("start", () => (followedEvent = -1));
 
   // Échange de trames avec le worker : la trame est copiée avant que le buffer reparte.
   let buffer: ArrayBuffer | null = new ArrayBuffer(total * FRAME_STRIDE * 4);
@@ -184,9 +196,13 @@ async function main() {
     } else if (msg.type === "traffic") traffic.update(msg.data);
     else if (msg.type === "cohortRequest") {
       decisions.request(msg.sid, msg.event, msg.cohorts);
+      followedEvent = -1;
       const ev = currentPlan?.events.find((e) => e.sid === msg.sid);
       if (ev) lookAt(ev.x, ev.z);
-    } else if (msg.type === "impact") decisions.impact(msg.impact);
+    } else if (msg.type === "impact") {
+      decisions.impact(msg.impact);
+      events.setPresence(msg.impact.sid, msg.impact.active ? msg.impact.participants : 0);
+    } else if (msg.type === "bilanRequest") decisions.bilan(msg.sid, msg.event, msg.bilan);
     else if (msg.type === "analysisRequest") decisions.analyse(msg.sid, msg.before, msg.after);
   };
 
@@ -227,6 +243,10 @@ async function main() {
         if (follow) world.flyTo = new THREE.Vector3(x, 0, z);
       }
     } else marker.visible = false;
+    if (followedEvent >= 0) {
+      const ev = currentPlan?.events.find((e) => e.sid === followedEvent);
+      if (ev) world.flyTo = new THREE.Vector3(ev.x, 0, ev.z);
+    }
     bubbles.update(t, selected, info?.mind ?? null, info ?? undefined);
 
     world.render(dt);
@@ -306,7 +326,7 @@ function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {
   const el = $("#today");
   el.innerHTML = `<div class="panel-title">Aujourd'hui · ${WEATHER_ICON[w.kind]} ${w.kind}, ${w.tempC} °C</div>` +
     (plan.events.length
-      ? plan.events.map((ev) => `<button class="event-row${ev.byPlayer ? " player" : ""}" data-x="${ev.x}" data-z="${ev.z}" title="${ev.description}">${EVENT_ICON[ev.kind]} <b>${ev.title}</b><small>${ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small></button>`).join("")
+      ? plan.events.map((ev) => `<button class="event-row${ev.byPlayer ? " player" : ""}" data-x="${ev.x}" data-z="${ev.z}" title="${ev.description}">${ev.traits?.icon ?? EVENT_ICON[ev.kind]} <b>${ev.title}</b><small>${ev.end - ev.start >= 1439 ? "toute la journée" : `${hhmm(ev.start)} – ${hhmm(ev.end)}`}${ev.days && ev.days > 1 ? ` · jour ${ev.dayIndex}/${ev.days}` : ""}</small></button>`).join("")
       : `<div class="muted">Journée calme, aucun événement.</div>`);
   el.querySelectorAll<HTMLButtonElement>(".event-row").forEach((b) => (b.onclick = () => goTo(Number(b.dataset.x), Number(b.dataset.z))));
 }

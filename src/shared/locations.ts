@@ -27,6 +27,7 @@ export const LOCATIONS: NamedLocation[] = [
   { name: "L'Impérial", lat: 45.904, lon: 6.1445, labelHeight: 25, aliases: ["imperial", "casino", "albigny"] },
   { name: "Les Marquisats", lat: 45.893, lon: 6.136, labelHeight: 15, aliases: ["marquisats", "piscine"] },
   { name: "Lac d'Annecy", lat: 45.896, lon: 6.1405, labelHeight: 10, aliases: ["lac", "eau"] },
+  { name: "Haras d'Annecy", lat: 45.9046, lon: 6.1284, labelHeight: 15, aliases: ["haras"] },
   { name: "Centre-ville", lat: 45.9005, lon: 6.1255, labelHeight: 0, aliases: ["centre", "ville", "annecy", "partout"] },
 ];
 

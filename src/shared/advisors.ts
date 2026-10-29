@@ -2,7 +2,7 @@
 // Claude raisonne sur une vingtaine de groupes (profil × quartier) au lieu de milliers d'individus :
 // il reçoit ce que chaque groupe vit réellement et renvoie des ajustements de comportement,
 // que le moteur applique à tous les membres du groupe avec de la variabilité individuelle.
-import { EVENT_SPECS, type EventKind } from "./catalog";
+import { EVENT_SPECS, type EventKind, type EventTraits } from "./catalog";
 
 /** Ce qu'un groupe vit pendant l'événement (mesuré par la simulation). */
 export interface CohortStat {
@@ -57,6 +57,8 @@ export interface EventSummary {
   route: string[];
   days: number;
   when: string;
+  /** comportement résolu : nature, fréquentation, prix, décor, public, navettes… */
+  traits?: EventTraits;
 }
 
 /** Indicateurs de la ville sur une fenêtre glissante d'une heure. */
@@ -89,7 +91,7 @@ const pct = (v: number) => `${Math.round(v * 100)} %`;
 
 /** Réactions à règles, utilisées sans Claude : déduites des mêmes chiffres. */
 export function localCohortResponses(ev: EventSummary, cohorts: CohortStat[]): CohortResponse[] {
-  const spec = EVENT_SPECS[ev.kind];
+  const spec = { ...EVENT_SPECS[ev.kind], ...(ev.traits ? { attraction: ev.traits.attraction, closesRoads: ev.traits.closesRoads, icon: ev.traits.icon } : {}) };
   return cohorts.map((c) => {
     const hit = c.affectedShare;
     const roads = spec.closesRoads && ev.kind !== "manifestation" && ev.kind !== "marathon";
@@ -140,8 +142,9 @@ export function localCohortResponses(ev: EventSummary, cohorts: CohortStat[]): C
     }
     if (spec.attraction > 0 && !["manifestation", "marathon"].includes(ev.kind)) {
       r.joinEvent = clamp(spec.attraction * (c.profile === "etudiant" || c.profile === "touriste" ? 1.6 : 1), 0, 0.6);
-      r.mood = 1;
-      r.quote = `${spec.icon} On y va, ça a l'air sympa !`;
+      // les riverains d'un grand événement apprécient moins le bruit et le stationnement
+      r.mood = hit > 0.5 && (ev.traits?.attendance ?? 0) > 5000 ? -1 : 1;
+      r.quote = r.mood < 0 ? `${spec.icon} Encore du monde et du bruit en bas de chez moi ce soir.` : `${spec.icon} On y va, ça a l'air sympa !`;
     }
     return r;
   });
