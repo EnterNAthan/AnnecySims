@@ -34,6 +34,8 @@ export interface DayReport {
   jams: { name: string; slowdown: number }[];
   policy: Policy;
   weather: Weather;
+  households: number;
+  meanHouseholdSize: number;
   events: { kind: EventKind; title: string; visits: number }[];
 }
 
@@ -41,6 +43,13 @@ export interface AgentInfo {
   id: number;
   name: string;
   age: number;
+  sex: "M" | "F";
+  /** libellé de la catégorie socioprofessionnelle, null si sans objet */
+  csp: string | null;
+  partTime: boolean;
+  /** revenu mensuel par unité de consommation du foyer, arrondi à 10 € */
+  monthlyIncome: number;
+  household: { kind: string; cars: number; members: { id: number; name: string; age: number; relation: string }[] };
   profile: Profile;
   hasCar: boolean;
   hasBike: boolean;
