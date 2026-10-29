@@ -20,6 +20,11 @@ self.onmessage = async (ev: MessageEvent<ToWorker>) => {
     post({ type: "dayStart", day: engine.day, plan: engine.dayPlan });
     return;
   }
+  if (msg.type === "addEvent" && engine) {
+    const ev = engine.addEvent(msg.proposal);
+    post({ type: "planUpdate", plan: engine.dayPlan, added: ev.id });
+    return;
+  }
   if (msg.type === "inspect" && engine) {
     post({ type: "agent", info: engine.inspect(msg.id) });
     return;

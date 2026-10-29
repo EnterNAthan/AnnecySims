@@ -8,6 +8,8 @@ import { addOutings, insertOuting, planDay } from "./planner";
 import type { AgentInfo, DayReport, Policy, Thought } from "./protocol";
 import { ROAD_FLAGS } from "../shared/city";
 import { WaterMask } from "./water";
+import { EVENT_SPECS, type EventProposal } from "../shared/catalog";
+import { locationXZ } from "../shared/locations";
 
 /** Un agent simulé représente ce nombre de personnes réelles (trafic, chiffre d'affaires, CO₂). */
 export const AGENT_SCALE = 4;
@@ -53,6 +55,8 @@ export class Engine {
   private closuresApplied = new Set<number>();
   /** pensées émises depuis la dernière trame */
   thoughts: Thought[] = [];
+  /** événements du joueur dont la réaction des habitants n'a pas encore eu lieu */
+  private pendingReactions: CityEvent[] = [];
   private readonly rand: () => number;
   private readonly startDate: Date;
   private readonly city: City;
@@ -142,6 +146,193 @@ export class Engine {
     if (this.minute - a.lastThought < THOUGHT_COOLDOWN || this.rand() > chance) return;
     a.lastThought = this.minute;
     this.thoughts.push({ id: a.id, name: a.name, profile: a.profile, icon, text, minute: Math.round(this.minute) });
+    a.thoughtLog.push({ icon, text, day: this.day, minute: Math.round(this.minute) });
+    if (a.thoughtLog.length > 8) a.thoughtLog.shift();
+  }
+
+  /**
+   * Ce que l'habitant a en tête à cet instant, déduit de sa situation (trajet, lieu, heure, météo, besoins).
+   * Contrairement aux pensées « exprimées », il y en a toujours une.
+   */
+  private mind(a: Agent): { icon: string; text: string } {
+    const h = this.minute / 60;
+    const w = this.dayPlan.weather.kind;
+    const wet = w === "pluie" || w === "neige";
+    const t = a.trip;
+    const next = a.plan[a.step + 1];
+    for (const ev of this.dayPlan.events) {
+      if (!ev.byPlayer || this.minute < ev.start || this.minute >= ev.end) continue;
+      const d = Math.hypot(a.x - ev.x, a.z - ev.z);
+      const spec = EVENT_SPECS[ev.kind];
+      if (spec.danger && d < ev.radius * 1.5) return { icon: "😱", text: (PANIC[ev.kind] ?? ["Il faut partir d'ici !"])[a.id % 2] };
+      if (!spec.danger && d < ev.radius * 2) return { icon: spec.icon, text: (CURIOUS[ev.kind] ?? [`Incroyable : ${ev.title} !`])[a.id % 2 ? 0 : 1] ?? `Incroyable : ${ev.title} !` };
+      if (spec.weather || ev.kind === "panne" || ev.kind === "tempete") return { icon: spec.icon, text: (WEATHER_TALK[ev.kind] ?? ["Quelle journée…"])[0] };
+    }
+    const nextAt = next ? `${Math.floor(a.plan[a.step].until / 60)}h${String(Math.floor(a.plan[a.step].until % 60)).padStart(2, "0")}` : "";
+    if (t) {
+      const dest = a.plan[a.step + 1].place;
+      const late = this.minute - t.startMinute > t.freeMinutes * 1.3 + 3;
+      if (t.mode === Mode.Car) {
+        const r = this.graph.edgeRoad[t.path.edges[t.seg]];
+        const road = this.city.roads[r].name;
+        if (this.roadFactor[r] < 0.6) return { icon: "😤", text: `Ça n'avance pas${road ? ` ${road}` : ""}… je vais être en retard.` };
+        if (dest.kind === "exit" && a.profile === "frontalier") return { icon: "🇨🇭", text: "Direction Genève, pourvu que la douane soit fluide." };
+        return { icon: "🚗", text: late ? "Toujours ces bouchons, c'est usant." : `Ça roule bien, j'arrive bientôt${road ? ` par ${road}` : ""}.` };
+      }
+      if (t.style === "run") return { icon: "🏃", text: "Garder le rythme… encore un kilomètre." };
+      if (t.style === "dog") return { icon: "🐕", text: "Allez, on rentre ! Lâche ce bâton." };
+      if (wet) return { icon: w === "neige" ? "🥶" : "☔", text: w === "neige" ? "Attention, ça glisse." : "Vite, à l'abri !" };
+      if (dest.kind === "event") return { icon: "✨", text: `J'ai hâte d'arriver : ${dest.name}.` };
+      if (dest.kind === "work" && h < 10) return { icon: "☕", text: "Pas encore tout à fait réveillé·e…" };
+      if (dest === a.home && h > 17) return { icon: "🏠", text: "Enfin la fin de journée, je rentre." };
+      if (t.mode === Mode.Bike) return { icon: "🚲", text: "Le vent dans les cheveux, ça fait du bien." };
+      return { icon: "🚶", text: "Je profite de la balade en ville." };
+    }
+    const place = a.plan[a.step]?.place;
+    if (!place) return { icon: "🙂", text: "Rien de spécial." };
+    if (a.needs.social < 0.2) return { icon: "😔", text: "Ça me ferait du bien de voir du monde." };
+    switch (place.kind) {
+      case "home":
+        if (h < 6 || h >= 23) return { icon: "😴", text: "Zzz…" };
+        if (a.profile === "pendulaire") return { icon: "🏡", text: "Chez moi, en dehors d'Annecy." };
+        if (next && a.plan[a.step].until - this.minute < 30) return { icon: "⏰", text: `Je dois partir à ${nextAt}.` };
+        if (wet) return { icon: "🌧️", text: "Il pleut, je reste au chaud." };
+        return { icon: "🏠", text: h < 9 ? "Petit-déjeuner tranquille." : h > 19 ? "Soirée tranquille à la maison." : "Un moment au calme chez moi." };
+      case "work":
+        if (a.profile === "commercant") return { icon: "🏪", text: place.revenue > 300 ? "Bonne journée, la caisse se remplit !" : "Peu de clients aujourd'hui…" };
+        return a.needs.energy < 0.4 ? { icon: "😩", text: `Vivement ${nextAt}…` } : { icon: "💼", text: "Concentré·e sur le travail." };
+      case "school": return a.profile === "enfant" ? { icon: "🎒", text: "Vivement la récré !" } : { icon: "📚", text: "Les partiels approchent…" };
+      case "exit": return a.profile === "frontalier" ? { icon: "🇨🇭", text: "Au bureau à Genève." } : { icon: "🚘", text: "Hors d'Annecy." };
+      case "station": return { icon: "🚆", text: "Dans le Léman Express vers Genève." };
+      case "lake": return { icon: "😍", text: wet ? "Le lac sous la pluie a son charme." : "Le lac est magnifique aujourd'hui." };
+      case "park": return { icon: "🌳", text: "Un peu d'air frais au parc." };
+      case "bar": return { icon: "🍻", text: "Santé ! Une bonne soirée entre amis." };
+      case "food": return { icon: "🍝", text: "Qu'est-ce que je vais prendre…" };
+      case "grocery": return { icon: "🛒", text: "Ne rien oublier sur la liste." };
+      case "shop": return { icon: "🛍️", text: "Juste regarder… bon, peut-être acheter." };
+      case "culture": return { icon: "🎨", text: "Fascinant." };
+      case "event": return { icon: "🎉", text: `Quelle ambiance : ${place.name} !` };
+      case "hotel": return { icon: "🧳", text: "On prépare la visite de demain." };
+      default: return { icon: "🙂", text: PLACE_LABEL[place.kind] };
+    }
+  }
+
+  /** Événement actif de ce type à cette minute, s'il y en a un. */
+  private active(kind: CityEvent["kind"]) {
+    return this.dayPlan.events.find((e) => e.kind === kind && this.minute >= e.start && this.minute < e.end);
+  }
+
+  /**
+   * Ajoute un événement demandé par le joueur. La météo et les fermetures s'appliquent tout de suite ;
+   * les habitants réagissent au début de l'événement.
+   */
+  addEvent(p: EventProposal): CityEvent {
+    const spec = EVENT_SPECS[p.kind];
+    // une vague ou une crue frappe la rive, pas le milieu du lac
+    const location = (p.kind === "tsunami" || p.kind === "inondation") && p.location === "Lac d'Annecy" ? "Le Pâquier" : p.location;
+    const [x, z] = locationXZ(location);
+    const intensity = Math.max(1, Math.min(3, p.intensity));
+    const radius = spec.radius * [0, 0.6, 1, 1.7][intensity];
+    const start = Math.min(1439, Math.round(this.minute + Math.max(0, p.startIn)));
+    const closedRoads: number[] = [];
+    if (spec.closesRoads) {
+      this.city.roads.forEach((r, i) => {
+        if (!(r.f & ROAD_FLAGS.CAR)) return;
+        const hit = r.n.some((n) => Math.hypot(this.city.nodes[2 * n] - x, this.city.nodes[2 * n + 1] - z) < Math.max(radius, 40));
+        if (hit) closedRoads.push(i);
+      });
+    }
+    const ev: CityEvent = {
+      id: Math.max(-1, ...this.dayPlan.events.map((e) => e.id)) + 1,
+      kind: p.kind, title: p.title, description: p.description, x, z, start,
+      end: start + Math.max(10, p.durationMinutes),
+      attraction: spec.attraction * (intensity / 2), closedRoads, radius, intensity, byPlayer: true,
+    };
+    this.dayPlan.events.push(ev);
+    this.eventPlaces.set(ev.id, this.places.transient("event", x, z, ev.title));
+    if (spec.weather) {
+      const tempC = p.kind === "canicule" ? 33 + intensity * 2 : p.kind === "blizzard" ? -2 - intensity * 3 : this.dayPlan.weather.tempC;
+      this.dayPlan.weather = { kind: spec.weather, tempC };
+    }
+    this.pendingReactions.push(ev);
+    return ev;
+  }
+
+  /** Lieu sûr hors de la zone : le domicile s'il est épargné, sinon un parc à l'écart. */
+  private safePlace(a: Agent, ev: CityEvent, preferPark: boolean): Place {
+    const out = (p: Place) => Math.hypot(p.x - ev.x, p.z - ev.z) > ev.radius * 1.2;
+    if (!preferPark && out(a.home)) return a.home;
+    for (let i = 0; i < 12; i++) {
+      const p = this.places.near(preferPark ? "park" : i < 6 ? "park" : "lake", a.x, a.z, this.rand, 8);
+      if (out(p)) return p;
+    }
+    return a.home;
+  }
+
+  /** Réaction de la ville au début d'un événement du joueur. */
+  private react(ev: CityEvent) {
+    const spec = EVENT_SPECS[ev.kind];
+    const place = this.eventPlaces.get(ev.id)!;
+    const dist = (x: number, z: number) => Math.hypot(x - ev.x, z - ev.z);
+    const inZone = (p: Place) => dist(p.x, p.z) < ev.radius;
+    const say = (a: Agent, icon: string, lines: string[], force = false) => {
+      if (force) a.lastThought = -999;
+      this.think(a, icon, lines[Math.floor(this.rand() * lines.length)]);
+    };
+    const wet = spec.weather === "pluie" || spec.weather === "neige";
+
+    for (const a of this.agents) {
+      const d = dist(a.x, a.z);
+      const here = a.plan[a.step]?.place;
+      const free = !a.trip && here === a.home && here.kind !== "exit";
+
+      if (spec.danger && ev.kind !== "tempete") {
+        const near = d < ev.radius * 1.3;
+        const safe = this.safePlace(a, ev, ev.kind === "seisme");
+        if (near) {
+          a.satisfaction = Math.max(0, a.satisfaction - 0.08 * ev.intensity);
+          // part en courant vers un lieu sûr
+          if (!a.trip && a.step < a.plan.length && a.plan[a.step].place !== safe) {
+            a.plan.splice(a.step + 1, 0, { place: safe, until: ev.end + 20, travel: "run" });
+            a.plan[a.step].until = this.minute;
+            // la journée doit toujours finir à la maison
+            if (a.step + 2 === a.plan.length && safe !== a.home) a.plan.push({ place: a.home, until: 1800 });
+          }
+          say(a, "😱", PANIC[ev.kind] ?? ["Au secours !!", "Il faut partir d'ici !"], this.rand() < 0.5);
+        } else if (this.rand() < 0.03) say(a, "📱", [`Vous avez vu ? ${spec.label} vers ${place.name?.split(" — ").pop() ?? "le centre"} !`, `${spec.icon} Ma tante m'a envoyé une vidéo, c'est fou.`], true);
+        // plus personne ne va dans la zone pendant l'événement
+        for (let i = a.step + 1; i < a.plan.length; i++) {
+          const act = a.plan[i];
+          if (inZone(act.place) && act.place !== safe && a.plan[i - 1].until < ev.end) act.place = this.safePlace(a, ev, false);
+        }
+      }
+
+      if (wet || ev.kind === "tempete") {
+        // on rentre, on annule les sorties
+        for (let i = a.step + 1; i < a.plan.length; i++) if (OUTDOOR.has(a.plan[i].place.kind) && this.rand() < 0.8) a.plan[i].place = a.home;
+        if (!a.trip && here && OUTDOOR.has(here.kind)) a.plan[a.step].until = this.minute;
+        if (this.rand() < 0.02) say(a, spec.icon, WEATHER_TALK[ev.kind] ?? ["Quel temps !"], true);
+      }
+
+      if (ev.kind === "canicule" && free && this.rand() < 0.25) {
+        insertOuting(a, this.places.pick("lake", this.rand), this.minute + 10 + this.rand() * 60, 60 + this.rand() * 90);
+        if (this.rand() < 0.1) say(a, "🥵", ["Il fait une chaleur… direction le lac !", "Vivement une baignade."], true);
+      }
+
+      if (ev.kind === "panne" && this.rand() < 0.03) say(a, "🕯️", ["Plus de courant… où sont les bougies ?", "Mon frigo va tout décongeler !", "Toute la ville est dans le noir !"], true);
+
+      if (ev.attraction > 0 && free && a.profile !== "pendulaire") {
+        const interest = ev.kind === "ovni" ? (a.profile === "enfant" || a.profile === "etudiant" ? 2 : 1) : ev.kind === "feu_artifice" ? 1.5 : 1;
+        // pas trop loin : les curieux viennent surtout des environs
+        const reach = Math.max(0.15, 1 - d / 3000);
+        if (this.rand() < ev.attraction * interest * reach) {
+          const t = this.minute + 5 + this.rand() * Math.min(60, (ev.end - ev.start) / 2);
+          if (insertOuting(a, place, t, 30 + this.rand() * Math.min(120, ev.end - t))) {
+            if (this.rand() < 0.15) say(a, spec.icon, CURIOUS[ev.kind] ?? [`Je vais voir : ${ev.title} !`], true);
+          }
+        }
+      }
+    }
   }
 
   /** Ferme ou rouvre les rues des événements selon l'heure. */
@@ -172,6 +363,11 @@ export class Engine {
   }
 
   private step(dtMin: number) {
+    for (const ev of [...this.pendingReactions]) {
+      if (this.minute < ev.start) continue;
+      this.pendingReactions.splice(this.pendingReactions.indexOf(ev), 1);
+      this.react(ev);
+    }
     this.applyClosures();
     this.updateTraffic(dtMin);
     const dtSec = dtMin * 60;
@@ -315,7 +511,8 @@ export class Engine {
     a.x = place.x;
     a.z = place.z;
     if (place === a.home) a.tourMode = null;
-    const spend = (SPEND[place.kind] ?? 0) * (a.profile === "touriste" ? 1.5 : 1) * (0.6 + this.rand() * 0.8);
+    const blackout = !!this.active("panne") && place.kind !== "event" && place.kind !== "lake";
+    const spend = blackout ? 0 : (SPEND[place.kind] ?? 0) * (a.profile === "touriste" ? 1.5 : 1) * (0.6 + this.rand() * 0.8);
     if (spend > 0) {
       place.revenue += spend * AGENT_SCALE;
       a.spentToday += spend;
@@ -528,6 +725,8 @@ export class Engine {
         return { from: i === 0 ? "00:00" : hhmm(a.plan[i - 1].until), place: label(act.place), done: i < current, current: i === current };
       }),
       travelMinutes: Math.round(a.travelMinutes), spentToday: Math.round(a.spentToday),
+      mind: this.mind(a),
+      thoughts: a.thoughtLog.slice().reverse().map((th) => ({ icon: th.icon, text: th.text, when: th.day === this.day ? hhmm(th.minute) : "hier" })),
     };
   }
 
@@ -550,6 +749,31 @@ export class Engine {
     return c;
   }
 }
+
+const PANIC: Partial<Record<CityEvent["kind"], string[]>> = {
+  meteorite: ["Une MÉTÉORITE !! Courez !", "Le ciel nous tombe sur la tête !"],
+  inondation: ["L'eau monte, vite, en hauteur !", "Ma cave est inondée !"],
+  tsunami: ["Une vague géante sur le lac !!", "Fuyez les quais !"],
+  incendie: ["Au feu ! Au feu !", "Il y a une fumée noire partout !"],
+  seisme: ["Ça tremble ! Sortez des bâtiments !", "J'ai cru que l'immeuble allait tomber !"],
+  tempete: ["Les arbres plient, c'est dangereux !", "Mon parapluie s'est envolé !"],
+};
+const CURIOUS: Partial<Record<CityEvent["kind"], string[]>> = {
+  ovni: ["Un OVNI ! Il faut que je filme ça !", "Ils viennent en paix… j'espère ?"],
+  feu_artifice: ["Oooh ! Aaah ! Magnifique !", "Le feu d'artifice se reflète dans le lac !"],
+  pique_nique: ["J'apporte la tomme et le saucisson !", "Pique-nique au soleil, le rêve."],
+  concert: ["J'entends la musique d'ici !", "Allez, on y va !"],
+  festival: ["L'ambiance du festival est géniale !", "Il y a un monde fou !"],
+  marche: ["Je vais faire un tour au marché.", "Des produits frais, parfait."],
+  manifestation: ["Il y a du monde dans la rue !", "C'est pour quoi, cette manif ?"],
+};
+const WEATHER_TALK: Partial<Record<CityEvent["kind"], string[]>> = {
+  tempete: ["Quelle tempête ! Restez chez vous.", "Les éclairs au-dessus du lac, impressionnant."],
+  blizzard: ["Tout est blanc, la ville est paralysée !", "On se croirait au Semnoz !"],
+  canicule: ["Il fait une chaleur écrasante !", "Vivement l'air frais du lac."],
+  inondation: ["Les rues sont inondées…", "Quelle pluie, ça déborde partout."],
+  panne: ["Toute la ville est dans le noir !", "Plus de courant nulle part…"],
+};
 
 function hash01(n: number) {
   let h = Math.imul(n ^ 0x9e3779b9, 0x85ebca6b);

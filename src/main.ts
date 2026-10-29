@@ -6,10 +6,13 @@ import { buildBuildings, buildGreens, buildRoads, buildTerrain, buildTrees, buil
 import { buildLandmarks } from "./render/landmarks";
 import { AgentsView } from "./render/agents";
 import { EventsView, hhmm } from "./render/events";
+import { ThoughtBubbles } from "./render/thoughts";
+import { setupCommandBar } from "./ui/command";
+import { locationXZ } from "./shared/locations";
 import { SimClock } from "./sim/clock";
 import { EVENT_ICON, WEATHER_ICON, type DayPlan } from "./sim/events";
 import { PROFILES, PROFILE_COLOR, PROFILE_LABEL } from "./sim/population";
-import { FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type ToWorker } from "./sim/protocol";
+import { FRAME_STRIDE, type AgentInfo, type DayReport, type FromWorker, type LiveCounts, type Thought, type ToWorker } from "./sim/protocol";
 
 const $ = <T extends HTMLElement>(sel: string) => document.querySelector<T>(sel)!;
 const fmt = (n: number) => Math.round(n).toLocaleString("fr-FR");
@@ -17,7 +20,7 @@ const pct = (v: number) => `${Math.round(v * 100)} %`;
 
 async function main() {
   const params = new URLSearchParams(location.search);
-  const residents = Number(params.get("pop") ?? 5000);
+  const residents = Number(params.get("pop") ?? 10000);
   // fin octobre : peu de touristes ; le calendrier saisonnier ajustera ce nombre
   const tourists = Math.round(residents * 0.04);
   const commuters = Math.round(residents * 0.12);
@@ -38,7 +41,7 @@ async function main() {
 
   const total = residents + tourists + commuters;
   const agents = new AgentsView(total);
-  const events = new EventsView(city);
+  const events = new EventsView(city, world);
   world.scene.add(agents.group, events.group);
 
   const clock = new SimClock(startDate, params.has("h") ? Number(params.get("h")) * 60 : 6 * 60);
@@ -75,6 +78,13 @@ async function main() {
     follow = false;
     world.flyTo = null;
   });
+  const bubbles = new ThoughtBubbles(agents, (id) => select(id));
+  world.scene.add(bubbles.group);
+  const feed: Thought[] = [];
+  $("#feed").addEventListener("click", (e) => {
+    const row = (e.target as HTMLElement).closest<HTMLElement>("[data-id]");
+    if (row) select(Number(row.dataset.id));
+  });
   $("#agent").addEventListener("click", (e) => {
     const t = e.target as HTMLElement;
     if (t.dataset.action === "close") select(-1);
@@ -82,11 +92,29 @@ async function main() {
   });
 
   // accès console pour le débogage : ?debug
-  if (params.has("debug")) Object.assign(window, { sim: { world, agents, clock, select } });
+  if (params.has("debug")) Object.assign(window, { sim: { world, agents, clock, select, events } });
 
   $("#loading").textContent = "Installation des habitants…";
   await ready;
   $("#loading").remove();
+
+  // Commandes en langage naturel → événements confirmés par le joueur.
+  let currentPlan: DayPlan | null = null;
+  setupCommandBar(
+    {
+      time: () => clock.label().split(" · ").pop()!,
+      weather: () => (currentPlan ? `${currentPlan.weather.kind}, ${currentPlan.weather.tempC} °C` : "inconnue"),
+    },
+    (proposal) => {
+      send({ type: "addEvent", proposal });
+      const onShore = (proposal.kind === "tsunami" || proposal.kind === "inondation") && proposal.location === "Lac d'Annecy";
+      const [x, z] = locationXZ(onShore ? "Le Pâquier" : proposal.location);
+      selected = -1;
+      $("#agent").classList.add("hidden");
+      follow = false;
+      world.flyTo = new THREE.Vector3(x, 0, z);
+    },
+  );
 
   // Échange de trames avec le worker : la trame est copiée avant que le buffer reparte.
   let buffer: ArrayBuffer | null = new ArrayBuffer(total * FRAME_STRIDE * 4);
@@ -99,8 +127,23 @@ async function main() {
       buffer = msg.buffer;
       frameCount = msg.count;
       renderCounts(msg.counts);
+      if (msg.thoughts.length) {
+        bubbles.push(msg.thoughts, performance.now() / 1000);
+        feed.push(...msg.thoughts);
+        if (feed.length > 7) feed.splice(0, feed.length - 7);
+        renderFeed(feed);
+      }
     } else if (msg.type === "day") renderReport(msg.report);
     else if (msg.type === "dayStart") {
+      currentPlan = msg.plan;
+      events.setPlan(msg.plan);
+      world.setWeather(msg.plan.weather.kind);
+      renderToday(msg.plan, (x, z) => {
+        follow = false;
+        world.flyTo = new THREE.Vector3(x, 0, z);
+      });
+    } else if (msg.type === "planUpdate") {
+      currentPlan = msg.plan;
       events.setPlan(msg.plan);
       world.setWeather(msg.plan.weather.kind);
       renderToday(msg.plan, (x, z) => {
@@ -128,6 +171,10 @@ async function main() {
     const t = now / 1000;
     if (frameCount) agents.update(frame, frameCount, world.camera.position.distanceTo(world.controls.target), world.night, t);
     events.update(clock.minute, t, world.night);
+    const active = events.activeKinds(clock.minute);
+    world.blackout = active.has("panne");
+    world.storm = active.has("tempete");
+    world.heat = active.has("canicule");
 
     if (selected >= 0) {
       const shown = agents.shownFrame[selected] === agents.frameNo;
@@ -140,6 +187,7 @@ async function main() {
         if (follow) world.flyTo = new THREE.Vector3(x, 0, z);
       }
     } else marker.visible = false;
+    bubbles.update(t, selected, info?.mind ?? null, info ?? undefined);
 
     world.render(dt);
     requestAnimationFrame(loop);
@@ -180,6 +228,11 @@ function renderCounts(c: LiveCounts) {
   $("#counts").innerHTML = rows.map(([k, v]) => `<span>${k}</span><span class="v">${fmt(v)}</span>`).join("");
 }
 
+function renderFeed(feed: Thought[]) {
+  $("#feed").innerHTML = `<div class="panel-title">💬 Ce que disent les habitants</div>` +
+    feed.slice().reverse().map((th) => `<div class="feed-row" data-id="${th.id}"><span class="dot" style="--c:${PROFILE_COLOR[th.profile]}"></span><div><b>${th.name}</b> ${th.icon}<br><em>« ${th.text} »</em></div></div>`).join("");
+}
+
 function renderToday(plan: DayPlan, goTo: (x: number, z: number) => void) {
   const w = plan.weather;
   $("#weather").textContent = `${WEATHER_ICON[w.kind]} ${w.tempC} °C`;
@@ -202,8 +255,10 @@ function renderAgent(a: AgentInfo, following: boolean) {
       <button data-action="close" title="Fermer">✕</button>
     </div>
     <div class="now">${a.now}</div>
+    <div class="mind"><span>${a.mind.icon}</span><em>« ${a.mind.text} »</em></div>
     ${bar("Énergie", a.needs.energy)}${bar("Vie sociale", a.needs.social)}${bar("Loisirs", a.needs.fun)}${bar("Satisfaction", a.satisfaction)}
     <div class="muted small">${a.hasCar ? "🚗 voiture" : "pas de voiture"} · ${a.hasBike ? "🚲 vélo" : "pas de vélo"} · ${a.travelMinutes} min de trajet · ${a.spentToday} € dépensés</div>
+    ${a.thoughts.length ? `<div class="panel-title">Ses dernières pensées</div><ul class="thought-log">${a.thoughts.map((th) => `<li><span>${th.when}</span>${th.icon} ${th.text}</li>`).join("")}</ul>` : ""}
     <div class="panel-title">Sa journée</div>
     <ol class="schedule">${a.schedule.map((s) => `<li class="${s.current ? "current" : s.done ? "done" : ""}"><span>${s.from}</span>${s.place}</li>`).join("")}</ol>
     ${following ? "" : `<button data-action="follow" class="wide">🎥 Suivre avec la caméra</button>`}

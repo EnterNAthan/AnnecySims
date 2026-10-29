@@ -91,6 +91,8 @@ export interface Agent {
   hasDog: boolean;
   /** minute de la dernière pensée exprimée, pour ne pas spammer */
   lastThought: number;
+  /** dernières pensées exprimées (la plus récente en dernier) */
+  thoughtLog: { icon: string; text: string; day: number; minute: number }[];
 }
 
 const FIRST = [
@@ -150,6 +152,7 @@ export function createPopulation(places: Places, residents: number, tourists: nu
       travelMinutes: 0, delayMinutes: 0, spentToday: 0,
       hasDog: profile !== "touriste" && profile !== "pendulaire" && profile !== "enfant" && rand() < (profile === "retraite" ? 0.3 : 0.12),
       lastThought: -999,
+      thoughtLog: [],
     };
     agents.push(a);
     return a;

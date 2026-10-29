@@ -2,8 +2,9 @@
 // le narrateur Claude produira plus tard des événements au même format.
 import type { City } from "../shared/city";
 import { project } from "../shared/geo";
+import { EVENT_KINDS, EVENT_SPECS, type EventKind } from "../shared/catalog";
 
-export type EventKind = "marche" | "concert" | "festival" | "travaux" | "accident" | "manifestation" | "brocante";
+export type { EventKind };
 export type WeatherKind = "soleil" | "nuageux" | "pluie" | "neige";
 
 export interface Weather {
@@ -25,6 +26,12 @@ export interface CityEvent {
   attraction: number;
   /** rues (index city.roads) fermées aux voitures pendant l'événement */
   closedRoads: number[];
+  /** rayon d'effet en m (fuite, curieux, visuels) */
+  radius: number;
+  /** 1 = léger, 2 = moyen, 3 = extrême */
+  intensity: number;
+  /** créé par le joueur (commande en langage naturel) */
+  byPlayer?: boolean;
 }
 
 export interface DayPlan {
@@ -32,9 +39,7 @@ export interface DayPlan {
   events: CityEvent[];
 }
 
-export const EVENT_ICON: Record<EventKind, string> = {
-  marche: "🧺", concert: "🎵", festival: "🎬", travaux: "🚧", accident: "💥", manifestation: "📣", brocante: "🪑",
-};
+export const EVENT_ICON = Object.fromEntries(EVENT_KINDS.map((k) => [k, EVENT_SPECS[k].icon])) as Record<EventKind, string>;
 
 export const WEATHER_ICON: Record<WeatherKind, string> = { soleil: "☀️", nuageux: "☁️", pluie: "🌧️", neige: "🌨️" };
 
@@ -75,7 +80,7 @@ export function generateDayPlan(city: City, date: Date, rand: () => number): Day
   if (kind === "pluie" && tempC <= 1) kind = "neige";
 
   const events: CityEvent[] = [];
-  const add = (e: Omit<CityEvent, "id">) => events.push({ ...e, id: events.length });
+  const add = (e: Omit<CityEvent, "id" | "radius" | "intensity">) => events.push({ radius: EVENT_SPECS[e.kind].radius, intensity: 2, ...e, id: events.length });
 
   // Marché de la vieille ville : mardi, vendredi, dimanche matin
   if ([0, 2, 5].includes(dow)) {

@@ -29,6 +29,17 @@ export class World {
   private precip?: THREE.LineSegments | THREE.Points;
   /** point que la caméra rejoint en douceur (lieu cliqué, habitant suivi) */
   flyTo: THREE.Vector3 | null = null;
+  /** panne de courant : fenêtres et lampadaires éteints */
+  blackout = false;
+  /** tempête : éclairs aléatoires et pluie penchée par le vent */
+  storm = false;
+  /** canicule : brume chaude orangée */
+  heat = false;
+  private flashLight = new THREE.PointLight("#dfe8ff", 0, 0, 0);
+  private flashLevel = 0;
+  private shakeLevel = 0;
+  private nextLightning = 0;
+  private bolt?: THREE.Line;
 
   constructor(container: HTMLElement) {
     this.renderer = new THREE.WebGLRenderer({ antialias: true, logarithmicDepthBuffer: true });
@@ -73,6 +84,8 @@ export class World {
     this.sun.shadow.normalBias = 0.6;
     this.scene.add(this.sun, this.sun.target, this.moon, this.moon.target, this.hemi);
 
+    this.flashLight.position.set(0, 1500, 0);
+    this.scene.add(this.flashLight);
     window.addEventListener("resize", () => this.resize());
     this.resize();
   }
@@ -115,6 +128,47 @@ export class World {
     this.scene.add(this.precip);
   }
 
+  /** Éclair de lumière (impact, foudre) ; `power` ~1 pour un éclair, 3 pour une météorite. */
+  flash(at: THREE.Vector3, power = 1) {
+    this.flashLight.position.set(at.x, 400, at.z);
+    this.flashLevel = Math.max(this.flashLevel, power);
+  }
+
+  /** Secousse de caméra (séisme, impact). */
+  shake(power: number) {
+    this.shakeLevel = Math.max(this.shakeLevel, power);
+  }
+
+  private updateEffects(dt: number) {
+    this.flashLevel *= Math.exp(-dt * 8);
+    this.flashLight.intensity = Math.min(this.flashLevel, 2) * 1.2e6;
+    if (this.bolt) {
+      const m = this.bolt.material as THREE.LineBasicMaterial;
+      m.opacity -= dt * 4;
+      if (m.opacity <= 0) {
+        this.scene.remove(this.bolt);
+        this.bolt.geometry.dispose();
+        this.bolt = undefined;
+      }
+    }
+    if (this.storm && performance.now() > this.nextLightning) {
+      this.nextLightning = performance.now() + 1500 + Math.random() * 5000;
+      const t = this.controls.target;
+      const x = t.x + (Math.random() - 0.5) * 2500, z = t.z + (Math.random() - 0.5) * 2500;
+      const pts: THREE.Vector3[] = [];
+      for (let y = 900, px = x, pz = z; y > 0; y -= 60 + Math.random() * 60) {
+        pts.push(new THREE.Vector3(px, y, pz));
+        px += (Math.random() - 0.5) * 80;
+        pz += (Math.random() - 0.5) * 80;
+      }
+      if (this.bolt) this.scene.remove(this.bolt);
+      this.bolt = new THREE.Line(new THREE.BufferGeometry().setFromPoints(pts), new THREE.LineBasicMaterial({ color: "#eef3ff", transparent: true, opacity: 1 }));
+      this.scene.add(this.bolt);
+      this.flash(new THREE.Vector3(x, 0, z), 1.2);
+    }
+    this.shakeLevel *= Math.exp(-dt * 1.5);
+  }
+
   private updatePrecip(dt: number) {
     if (!this.precip) return;
     const rain = this.weather === "pluie";
@@ -126,8 +180,18 @@ export class World {
     const stride = rain ? 6 : 3;
     for (let i = 0; i < arr.length; i += stride) {
       arr[i + 1] -= fall;
-      if (rain) arr[i + 4] -= fall;
-      else arr[i] += Math.sin(arr[i + 1] * 0.05) * 0.3;
+      if (rain) {
+        arr[i + 4] -= fall;
+        if (this.storm) {
+          // vent : la pluie part en diagonale
+          arr[i] += fall * 0.5;
+          arr[i + 3] = arr[i] + 6;
+          if (arr[i] > PRECIP_BOX / 2) {
+            arr[i] -= PRECIP_BOX;
+            arr[i + 3] -= PRECIP_BOX;
+          }
+        }
+      } else arr[i] += Math.sin(arr[i + 1] * 0.05) * 0.3;
       if (arr[i + 1] < 0) {
         arr[i + 1] += PRECIP_HEIGHT;
         if (rain) arr[i + 4] += PRECIP_HEIGHT;
@@ -171,8 +235,14 @@ export class World {
     this.fog.near = 3000 - overcast * 2200;
     this.fog.far = 26000 - overcast * 17000;
 
-    if (this.windowMaterial) this.windowMaterial.emissiveIntensity = 1.6 * this.night;
-    for (const m of streetMaterials) m.emissiveIntensity = 0.22 * this.night;
+    const power = this.blackout ? 0 : 1;
+    if (this.windowMaterial) this.windowMaterial.emissiveIntensity = 1.6 * this.night * power;
+    for (const m of streetMaterials) m.emissiveIntensity = 0.22 * this.night * power;
+    if (this.heat) this.fog.color.lerp(new THREE.Color("#e8b26a"), 0.45 * day);
+    if (this.storm) {
+      this.fog.color.lerp(new THREE.Color("#3b4450"), 0.6 * day);
+      this.hemi.intensity *= 0.55;
+    }
     waterMaterial.color.set("#3a7ca3").lerp(new THREE.Color("#0b1d33"), this.night * 0.85);
   }
 
@@ -184,8 +254,15 @@ export class World {
       this.camera.position.add(delta);
     }
     this.updatePrecip(dt);
+    this.updateEffects(dt);
     this.controls.update();
+    // la secousse est appliquée juste pour le rendu, puis annulée
+    const shake = new THREE.Vector3(
+      (Math.random() - 0.5) * this.shakeLevel * 6, (Math.random() - 0.5) * this.shakeLevel * 4, (Math.random() - 0.5) * this.shakeLevel * 6,
+    );
+    this.camera.position.add(shake);
     this.renderer.render(this.scene, this.camera);
+    this.camera.position.sub(shake);
     this.labels.render(this.scene, this.camera);
   }
 }

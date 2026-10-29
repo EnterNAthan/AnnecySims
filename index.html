@@ -33,7 +33,26 @@
       <aside id="agent" class="panel hidden"></aside>
       <aside id="report" class="panel hidden"></aside>
     </div>
-    <div id="hint">Clique sur un habitant pour le suivre</div>
+    <aside id="feed" class="panel"><div class="panel-title">💬 Ce que disent les habitants</div></aside>
+    <div id="command">
+      <div id="proposal" class="hidden"></div>
+      <form id="command-form" autocomplete="off">
+        <span>🪄</span>
+        <input id="command-input" placeholder="Que doit-il arriver à Annecy ? ex. « une météorite sur le Pâquier »" />
+        <button type="submit">Envoyer</button>
+      </form>
+      <div id="chips">
+        <button data-say="Une énorme météorite s'écrase sur le Pâquier">☄️ Météorite</button>
+        <button data-say="Un tsunami déferle sur le lac">🌊 Tsunami</button>
+        <button data-say="Une violente tempête avec des éclairs">⛈️ Tempête</button>
+        <button data-say="Un OVNI apparaît au-dessus du Pâquier">🛸 OVNI</button>
+        <button data-say="Un feu d'artifice au-dessus du lac">🎆 Feu d'artifice</button>
+        <button data-say="Le Thiou déborde, inondation dans la vieille ville">🌊 Inondation</button>
+        <button data-say="Un tremblement de terre">🫨 Séisme</button>
+        <button data-say="Panne de courant dans toute la ville">🔌 Panne</button>
+        <button data-say="Organise un pique-nique au Pâquier cet après-midi">🧺 Pique-nique</button>
+      </div>
+    </div>
     <footer id="credits">© contributeurs OpenStreetMap</footer>
     <script type="module" src="/src/main.ts"></script>
   </body>

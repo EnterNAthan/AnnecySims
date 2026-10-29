@@ -1,6 +1,7 @@
 // Messages échangés entre la page et le worker de simulation.
 import type { Profile } from "./population";
 import type { DayPlan, EventKind, Weather } from "./events";
+import type { EventProposal } from "../shared/catalog";
 
 /** Leviers municipaux appliqués à la simulation (enrichis aux étapes suivantes). */
 export interface Policy {
@@ -53,6 +54,10 @@ export interface AgentInfo {
   schedule: { from: string; place: string; done: boolean; current: boolean }[];
   travelMinutes: number;
   spentToday: number;
+  /** ce qu'il a en tête à cet instant */
+  mind: { icon: string; text: string };
+  /** dernières pensées exprimées, la plus récente d'abord */
+  thoughts: { icon: string; text: string; when: string }[];
 }
 
 export interface LiveCounts {
@@ -81,13 +86,16 @@ export type ToWorker =
   | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string }
   /** avance jusqu'à `minute` du jour `day` ; renvoie le buffer pour réutilisation */
   | { type: "tick"; day: number; minute: number; buffer: ArrayBuffer }
-  | { type: "inspect"; id: number };
+  | { type: "inspect"; id: number }
+  | { type: "addEvent"; proposal: EventProposal };
 
 export type FromWorker =
   | { type: "ready"; agents: number; places: Record<string, number> }
   | { type: "frame"; buffer: ArrayBuffer; count: number; counts: LiveCounts; day: number; minute: number; thoughts: Thought[] }
   | { type: "day"; report: DayReport }
   | { type: "dayStart"; day: number; plan: DayPlan }
+  /** le plan du jour a changé (événement ajouté par le joueur) */
+  | { type: "planUpdate"; plan: DayPlan; added: number }
   | { type: "agent"; info: AgentInfo | null };
 
 export const FRAME_STRIDE = 6;

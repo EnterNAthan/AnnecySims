@@ -3,10 +3,13 @@ import * as THREE from "three";
 import { CSS2DObject } from "three/examples/jsm/renderers/CSS2DRenderer.js";
 import type { City } from "../shared/city";
 import { EVENT_ICON, type CityEvent, type DayPlan, type EventKind } from "../sim/events";
+import { earthquake, fire, fireworks, flood, meteorite, picnic, tsunami, ufo, type Animate, type FxHost } from "./disasters";
 
 const KIND_COLOR: Record<EventKind, string> = {
   marche: "#f2b134", concert: "#c264ff", festival: "#ff5fa2", travaux: "#ff8a1f", accident: "#ff3b3b",
-  manifestation: "#4fc3ff", brocante: "#9ccc65",
+  manifestation: "#4fc3ff", brocante: "#9ccc65", meteorite: "#ff6a1a", inondation: "#3d9bff", tsunami: "#1f7dff",
+  tempete: "#8a93a6", incendie: "#ff4a12", seisme: "#c79b5b", panne: "#ffe14d", ovni: "#7dff8a", canicule: "#ff9a3c",
+  blizzard: "#dff3ff", feu_artifice: "#ff4dc4", pique_nique: "#ff5a5a",
 };
 
 export const hhmm = (m: number) => `${Math.floor(m / 60)}h${String(Math.round(m % 60)).padStart(2, "0")}`;
@@ -28,30 +31,53 @@ interface EventVisual {
   props: THREE.Group;
   /** éléments animés (projecteurs, gyrophares) */
   animate?: (t: number, night: number) => void;
+  /** effet spectaculaire, animé en temps réel depuis son déclenchement */
+  fx?: Animate;
+  /** instant réel (s) où l'événement est devenu actif à l'écran */
+  shownSince?: number;
 }
 
 export class EventsView {
   readonly group = new THREE.Group();
   private visuals: EventVisual[] = [];
 
-  constructor(private readonly city: City) {
+  constructor(private readonly city: City, private readonly host: FxHost) {
     this.group.name = "events";
   }
 
+  /** Remplace les événements affichés ; ceux déjà présents (même id) gardent leur animation en cours. */
   setPlan(plan: DayPlan) {
-    for (const v of this.visuals) v.label.element.remove();
-    this.group.clear();
-    this.visuals = plan.events.map((ev) => this.build(ev));
+    const keep = new Map(this.visuals.map((v) => [`${v.ev.id}:${v.ev.kind}:${v.ev.title}`, v]));
+    const next: EventVisual[] = [];
+    for (const ev of plan.events) {
+      const key = `${ev.id}:${ev.kind}:${ev.title}`;
+      const old = keep.get(key);
+      if (old) {
+        keep.delete(key);
+        next.push(old);
+      } else next.push(this.build(ev));
+    }
+    for (const v of keep.values()) {
+      v.label.element.remove();
+      this.group.remove(v.label, v.ring, v.props);
+    }
+    this.visuals = next;
+  }
+
+  /** Types d'événements en cours, pour les effets globaux (tempête, panne, canicule). */
+  activeKinds(minute: number): Set<EventKind> {
+    return new Set(this.visuals.filter((v) => minute >= v.ev.start && minute < v.ev.end).map((v) => v.ev.kind));
   }
 
   private build(ev: CityEvent): EventVisual {
     const color = KIND_COLOR[ev.kind];
     const el = document.createElement("div");
-    el.className = "event-label";
+    el.className = ev.byPlayer ? "event-label player" : "event-label";
     el.style.setProperty("--c", color);
     el.innerHTML = `<span class="icon">${EVENT_ICON[ev.kind]}</span><span><b>${ev.title}</b><small>${hhmm(ev.start)} – ${hhmm(ev.end)}</small></span>`;
     const label = new CSS2DObject(el);
-    label.position.set(ev.x, 45, ev.z);
+    // au-dessus des effets en hauteur (soucoupe, gerbes)
+    label.position.set(ev.x, ev.kind === "ovni" ? 230 : ev.kind === "feu_artifice" ? 320 : 45, ev.z);
 
     const ring = new THREE.Mesh(
       new THREE.RingGeometry(22, 30, 40).rotateX(-Math.PI / 2),
@@ -65,6 +91,16 @@ export class EventsView {
     if (ev.kind === "concert" || ev.kind === "festival") visual.animate = this.stage(ev, props, color);
     if (ev.closedRoads.length) this.closure(ev, props, color);
     if (ev.kind === "accident") visual.animate = this.beacon(ev, props);
+    if (ev.kind === "meteorite") visual.fx = meteorite(ev, props, this.host);
+    if (ev.kind === "incendie") visual.fx = fire(ev.x, ev.z, 25 + ev.intensity * 15, props);
+    if (ev.kind === "inondation") visual.fx = flood(ev, props);
+    if (ev.kind === "tsunami") visual.fx = tsunami(ev, props, this.host);
+    if (ev.kind === "seisme") visual.fx = earthquake(ev, props, this.host);
+    if (ev.kind === "ovni") visual.fx = ufo(ev, props);
+    if (ev.kind === "feu_artifice") visual.fx = fireworks(ev, props, this.host);
+    if (ev.kind === "pique_nique") picnic(ev, props);
+    // pour les grands phénomènes, l'anneau délimite la zone touchée
+    if (ev.radius > 100 && ev.radius < 2000) ring.scale.setScalar(ev.radius / 30);
 
     this.group.add(label, ring, props);
     return visual;
@@ -177,9 +213,13 @@ export class EventsView {
       v.ring.visible = active;
       v.props.visible = active;
       if (active) {
-        const k = 1 + 0.15 * Math.sin(time * 3);
+        const base = v.ev.radius > 100 && v.ev.radius < 2000 ? v.ev.radius / 30 : 1;
+        const k = base * (1 + 0.08 * Math.sin(time * 3));
         v.ring.scale.set(k, 1, k);
+        v.ring.visible = v.ev.radius < 2000;
         v.animate?.(time, night);
+        v.shownSince ??= time;
+        v.fx?.(time - v.shownSince, time, night);
       }
     }
   }
