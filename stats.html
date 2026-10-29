@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="fr">
+  <head><meta charset="UTF-8" /><meta name="viewport" content="width=device-width, initial-scale=1.0" /><title>Statistiques IA · Annecy</title></head>
+  <body>
+    <main>
+      <header><div><a href="/">← Ville</a><p class="eyebrow">ANNECY / OBSERVATOIRE IA</p><h1>Activité du modèle</h1><p id="model"></p></div><span id="connection">Connexion…</span></header>
+      <p class="notice">Garde la ville ouverte dans un autre onglet pour faire tourner les habitants. Cette page observe les appels sans lancer de simulation.</p>
+      <section id="metrics" aria-label="Indicateurs du modèle"></section>
+      <section class="journal" id="configuration"><h2>Configuration IA</h2><p class="notice">Appliquée aux prochains appels dans les villes ouvertes, sous deux secondes. Les appels en cours se terminent normalement. Les réglages sont conservés jusqu’au redémarrage du serveur.</p><form id="config-form"><div class="config-scroll"><table class="config-table"><thead><tr><th scope="col">Paramètre</th><th scope="col">Valeur</th><th scope="col">Effet</th></tr></thead><tbody id="config-fields"></tbody></table></div><div class="toolbar"><button type="submit">Appliquer</button><button type="button" id="config-reset">Valeurs prudentes</button><span id="config-status" role="status"></span></div></form></section>
+      <section class="journal"><div class="toolbar"><h2>Journal des appels</h2><label>Afficher <select id="filter"><option value="all">Tous les appels</option><option value="errors">Erreurs</option><option value="502">Erreurs 502</option><option value="talk">Conversations</option></select></label><label>Rechercher <input id="search" type="search" placeholder="Personne, message, erreur…" /></label><button id="freeze" aria-pressed="false">Figer</button></div><p id="summary"></p><div id="calls"></div></section>
+    </main>
+    <script type="module" src="/src/stats.ts"></script>
+  </body>
+</html>

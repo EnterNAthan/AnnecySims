@@ -1,5 +1,8 @@
 // Messages échangés entre la page et le worker de simulation.
 import type { Profile } from "./population";
+import type { AiLog } from "../shared/intelligence";
+import type { AiConfig } from "../shared/aiConfig";
+import type { AiPopulation } from "./aiPopulation";
 import type { DayPlan, EventKind, Weather } from "./events";
 import type { EventProposal } from "../shared/catalog";
 import type { CohortResponse, CohortStat, EventSummary, Kpis } from "../shared/advisors";
@@ -43,6 +46,7 @@ export interface DayReport {
 }
 
 export interface AgentInfo {
+  intelligence?: { status: string; memories: string[]; goal?: string; plan?: string[]; mode?: "llm" | "automatic" };
   id: number;
   name: string;
   age: number;
@@ -175,7 +179,9 @@ export type EngineMessage =
   | { type: "cityEvent"; sid: number; event: EventSummary; day: number };
 
 export type ToWorker =
-  | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string }
+  | { type: "chat"; id: number; text?: string }
+  | { type: "aiConfig"; config: AiConfig }
+  | { type: "init"; residents: number; tourists: number; commuters: number; seed: number; startDate: string; aiEnabled?: boolean }
   /** avance jusqu'à `minute` du jour `day` ; renvoie le buffer pour réutilisation */
   | { type: "tick"; day: number; minute: number; buffer: ArrayBuffer }
   | { type: "inspect"; id: number }
@@ -185,6 +191,9 @@ export type ToWorker =
   | { type: "cancelEvent"; sid: number };
 
 export type FromWorker =
+  | { type: "chat"; chat: import("../shared/chat").ResidentChat }
+  | { type: "aiPopulation"; population: AiPopulation }
+  | { type: "aiLog"; entry: AiLog }
   | { type: "ready"; agents: number; places: Record<string, number> }
   | { type: "frame"; buffer: ArrayBuffer; count: number; counts: LiveCounts; day: number; minute: number; thoughts: Thought[] }
   | { type: "day"; report: DayReport }

@@ -2,6 +2,7 @@ node_modules
 dist
 data/osm-raw.json
 .env
+benchmarks/results/
 data/asset-cache/
 data/transit-raw.json
 data/interpret-cache.json

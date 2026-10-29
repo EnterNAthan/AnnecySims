@@ -1,0 +1,25 @@
+import assert from "node:assert/strict";
+import { decide, type RequestMetrics } from "../server/intelligence";
+import { DEFAULT_AI_CONFIG } from "../src/shared/aiConfig";
+const env = { ARKANE_API_KEY: "test-key", ARKANE_BASE_URL: "https://example.invalid/api/v2" };
+const body = { contexts: [0, 1, 2, 3, 4].map((agentId) => ({ agentId, context: JSON.stringify({ person: { id: agentId }, nearby: [], destinations: [] }) })) };
+let metrics: RequestMetrics | undefined;
+globalThis.fetch = async (_url, options) => {
+  const request = JSON.parse(String(options?.body));
+  assert.equal(request.model, DEFAULT_AI_CONFIG.model);
+  assert.equal(request.messages.length, 2);
+  assert.equal(request.max_tokens, DEFAULT_AI_CONFIG.maxTokens);
+  assert.equal(request.reasoning_effort, "none");
+  return Response.json({ choices: [{ message: { content: JSON.stringify({ decisions: body.contexts.map(({ agentId }) => ({ agentId, thought: "Je continue.", action: "continue" })) }) }, finish_reason: "stop" }], usage: { prompt_tokens: 500, completion_tokens: 200, completion_tokens_details: { reasoning_tokens: 0 } } });
+};
+await decide(body, env, DEFAULT_AI_CONFIG, (value) => { metrics = value; });
+assert.equal(metrics?.valid, true);
+assert.equal(metrics?.promptTokens, 500);
+assert.equal(metrics?.httpStatus, 200);
+globalThis.fetch = async () => Response.json({ choices: [{ message: { content: "{" }, finish_reason: "length" }] });
+await assert.rejects(decide(body, env, DEFAULT_AI_CONFIG, (value) => { metrics = value; }), /tronquée/);
+assert.equal(metrics?.valid, false);
+globalThis.fetch = async () => new Response("test-key : quota", { status: 429 });
+await assert.rejects(decide(body, env, DEFAULT_AI_CONFIG, (value) => { metrics = value; }), (error: Error) => error.message.includes("429") && !error.message.includes("test-key"));
+assert.equal(metrics?.httpStatus, 429);
+console.log("Adaptateur Arkane : paramètres, mesures, troncature et masquage de clé : OK");

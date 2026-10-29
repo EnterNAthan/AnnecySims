@@ -3,6 +3,9 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { readFileSync } from "node:fs";
 import { analyze, cohortResponses, finalReport, interpret, warm } from "./interpret";
 import { assetFile } from "./assets";
+import { createIntelligenceApi } from "./intelligenceApi";
+
+const handleIntelligence = createIntelligenceApi(process.env as Record<string, string>);
 
 type Handler = (body: any) => Promise<unknown>;
 
@@ -59,6 +62,7 @@ function serveRoute(handler: Handler, req: IncomingMessage, res: ServerResponse)
 
 /** Handles the request if it targets the API; returns false to let the caller serve it. */
 export function handleApi(req: IncomingMessage, res: ServerResponse): boolean {
+  if (handleIntelligence(req, res)) return true;
   const path = (req.url ?? "/").split("?")[0];
   if (path.startsWith("/models/")) {
     void serveModel(decodeURIComponent(path.slice("/models/".length).replace(/\.glb$/, "")), res);

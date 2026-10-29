@@ -4,13 +4,13 @@ import { readFileSync } from "node:fs";
 import type { City } from "../src/shared/city";
 import { Engine } from "../src/sim/engine";
 
-const residents = Number(process.argv[2] ?? 5000);
+const residents = Number(process.argv[2] ?? 2550);
 const days = Number(process.argv[3] ?? 2);
 const city: City = JSON.parse(readFileSync("public/city.json", "utf8"));
 
 let t = performance.now();
 const engine = new Engine(city, {
-  residents, tourists: Math.round(residents * 0.04), commuters: Math.round(residents * 0.12), seed: 2026, startDate: new Date("2026-10-29"),
+  residents, tourists: 0, commuters: 0, seed: 2026, startDate: new Date("2026-10-29"),
 });
 console.log(`${engine.households.length} foyers, taille moyenne ${(engine.agents.length / engine.households.length).toFixed(2)}`);
 console.log(`init ${(performance.now() - t).toFixed(0)} ms, ${engine.agents.length} agents`);

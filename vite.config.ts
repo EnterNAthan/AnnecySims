@@ -7,6 +7,7 @@ function aiApi(): Plugin {
     name: "annecy-ai-api",
     configureServer(server) {
       server.middlewares.use((req, res, next) => {
+        if (req.url?.split("?")[0] === "/stats") req.url = req.url.replace("/stats", "/stats.html");
         if (!handleApi(req, res)) next();
       });
     },
@@ -16,5 +17,5 @@ function aiApi(): Plugin {
 export default defineConfig(({ mode }) => {
   // ARKANE_* du .env : lues côté serveur par server/llm.ts, jamais exposées au navigateur (pas de préfixe VITE_)
   Object.assign(process.env, loadEnv(mode, process.cwd(), "ARKANE_"));
-  return { plugins: [aiApi()] };
+  return { plugins: [aiApi()], build: { rollupOptions: { input: { main: "index.html", stats: "stats.html" } } } };
 });

@@ -10,7 +10,9 @@
     "fetch-osm": "tsx scripts/fetch-osm.ts",
     "build-city": "tsx scripts/build-city.ts",
     "typecheck": "tsc",
-    "sim:headless": "tsx scripts/sim-headless.ts"
+    "sim:headless": "tsx scripts/sim-headless.ts",
+    "bench:arkane": "tsx scripts/bench-arkane.ts",
+    "test:ai": "tsx scripts/check-intelligence.ts && tsx scripts/check-batch.ts && tsx scripts/check-context.ts && tsx scripts/check-stability.ts && tsx scripts/check-provider.ts && tsx scripts/check-integration.ts && tsx scripts/check-mixed-population.ts && tsx scripts/check-chat.ts && tsx scripts/check-api.ts"
   },
   "description": "Simulation d'Annecy : habitants, maire et narrateur pilotés par un LLM (Arkane)",
   "dependencies": {

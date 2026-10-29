@@ -4,13 +4,14 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Projet
 
-Simulation 3D (Three.js + Vite, TypeScript strict, ESM) du centre d'Annecy construite à partir d'OpenStreetMap : ~10 000 habitants simulés minute par minute, événements déclenchés en langage naturel (interprétés par un LLM via Arkane), bilans quotidiens. Les textes visibles par le joueur sont en français.
+Simulation 3D (Three.js + Vite, TypeScript strict, ESM) d'Annecy construite à partir d'OpenStreetMap : 2 550 habitants par défaut, dont 50 IA et 2 500 automatiques. Les événements, leur interface et le déploiement Docker/Helm viennent de main. Les textes visibles par le joueur sont en français.
 
 ## Commandes
 
 ```bash
 npm run dev            # serveur Vite + API (/api/*, /models/)
-npm run typecheck      # tsc (noEmit) — seul contrôle automatique, pas de tests ni de linter
+npm run typecheck      # tsc (noEmit)
+npm run test:ai        # régressions IA, chat, population mixte et routes HTTP (fournisseur simulé)
 npm run build          # tsc && vite build → dist/
 npm run build:server   # esbuild server/main.ts → dist-server/main.mjs (autonome, zod inclus)
 npm start              # serveur de prod : dist/ + API sur $PORT (8080)
@@ -23,7 +24,13 @@ npm run build-city     # data/osm-raw.json → public/city.json (versionné, ~2,
 
 `sim:headless` sert de test de non-régression du moteur : vérifier les temps et la cohérence du bilan après une modif dans `src/sim/`.
 
-Paramètres d'URL de la page : `?pop=N` (habitants), `?h=N` (heure de départ), `?paused`, `?debug` (expose `window.sim`).
+Paramètres d'URL de la page : `?pop=N` (2 550 résidents par défaut : 50 suivis par IA et 2 500 automatiques), `?h=N` (heure de départ), `?paused`, `?debug` (expose `window.sim`), `?ai=off` (désactive les décisions individuelles).
+
+## Intelligence individuelle
+
+Seuls 50 habitants sélectionnés de façon stable utilisent Arkane/Qwen via `server/intelligence.ts`, séparément des routes municipales Arkane de main et de leur repli local. Les 2 500 autres résidents conservent les plannings automatiques. La limite IA est réglable dans `/stats` et les personnes suivies sont accessibles dans le menu d'affichage. `src/sim/intelligence.ts` orchestre les décisions sans bloquer les ticks ; `aiContext.ts` transmet les besoins, souvenirs, contraintes, mobilité et événements proches actifs du moteur. Les visiteurs des événements et véhicules de transit restent automatiques. `server/intelligenceApi.ts` expose décisions, chat, configuration et statistiques en dev comme en production. Les discussions et biographies sont conservées dans le worker pendant la session. Un habitant simulé représente une personne (`AGENT_SCALE = 1`).
+
+`/stats` expose les mesures et la configuration (`/api/ai-config`). Profil stable : groupes de cinq, un appel en cours, `reasoning_effort: none`, un agent = une personne (`AGENT_SCALE = 1`). La clé `ARKANE_API_KEY` reste côté serveur. `npm run test:ai` vérifie aussi le raccordement aux événements, bus et parkings. Voir `benchmarks/README.md` pour les mesures Arkane isolées. Les endpoints sont disponibles uniquement avec le serveur de développement.
 
 `ARKANE_API_KEY` (+ `ARKANE_BASE_URL`, `ARKANE_MODEL`) dans `.env` en dev, en variables d'environnement en prod (voir `.env.example`) ; sans clé, l'interprétation retombe sur les mots-clés.
 
@@ -31,7 +38,7 @@ Paramètres d'URL de la page : `?pop=N` (habitants), `?h=N` (heure de départ), 
 
 Trois zones, séparées par ce qui peut tourner où :
 
-- **`src/sim/`** — moteur pur, sans DOM ni Three.js, exécutable dans Node (`scripts/sim-headless.ts`) comme dans le Web Worker (`worker.ts`). `engine.ts` est le cœur : agents, graphe routier (`graph.ts`), lieux (`places.ts`), planning journalier (`planner.ts`), événements/météo (`events.ts`). Un agent représente `AGENT_SCALE` = 4 personnes réelles pour le trafic, le CA et le CO₂.
+- **`src/sim/`** — moteur pur, sans DOM ni Three.js, exécutable dans Node (`scripts/sim-headless.ts`) comme dans le Web Worker (`worker.ts`). `engine.ts` est le cœur : agents, graphe routier (`graph.ts`), lieux (`places.ts`), planning journalier (`planner.ts`), événements/météo (`events.ts`). Un agent représente `AGENT_SCALE` = 1 personne réelle pour le trafic, le CA et le CO₂.
 - **`src/render/` + `src/main.ts` + `src/ui/`** — thread principal : scène Three.js, horloge (`SimClock`), UI. `main.ts` pilote le worker.
 - **`src/shared/`** — importé partout, y compris par le serveur : format `City`, projection géo (`BBOX`, `project`), catalogue d'événements, lieux nommés, interpréteur par mots-clés.
 

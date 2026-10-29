@@ -37,7 +37,8 @@ createServer((req, res) => {
     return;
   }
   // path traversal guard: the resolved file must stay inside STATIC_DIR
-  const path = decodeURIComponent((req.url ?? "/").split("?")[0]);
+  const requestedPath = decodeURIComponent((req.url ?? "/").split("?")[0]);
+  const path = requestedPath === "/stats" ? "/stats.html" : requestedPath;
   let file = join(STATIC_DIR, normalize(path));
   if (!file.startsWith(STATIC_DIR)) {
     res.statusCode = 403;

@@ -1,0 +1,13 @@
+import { loadEnv } from "vite";
+import { DEFAULT_AI_CONFIG } from "../src/shared/aiConfig";
+import { decide } from "../server/intelligence";
+import { readFileSync } from "node:fs";
+import { Engine } from "../src/sim/engine";
+import { buildAiContext } from "../src/sim/aiContext";
+const env = loadEnv("development", process.cwd(), "");
+const start = performance.now();
+const engine = new Engine(JSON.parse(readFileSync("public/city.json", "utf8")), { residents: 100, tourists: 0, commuters: 0, seed: 2026, startDate: new Date("2026-10-29") });
+const contexts = engine.agents.slice(0, 5).map((a) => ({ agentId: a.id, context: buildAiContext(engine, a, { memories: [], goal: "Organiser ma journée", plan: [] }, [], []) }));
+console.log("Contexte du lot, caractères :", contexts.reduce((sum, entry) => sum + entry.context.length, 0));
+const result = await decide({ contexts }, env, DEFAULT_AI_CONFIG);
+console.log("Modèle :", DEFAULT_AI_CONFIG.model, "Décisions :", "decisions" in result ? result.decisions.length : 1, "Durée ms :", Math.round(performance.now() - start));
