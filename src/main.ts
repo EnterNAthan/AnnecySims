@@ -71,6 +71,11 @@ async function main() {
     busBtn.classList.toggle("active");
     transit.showLines = busBtn.classList.contains("active");
   };
+  const parkBtn = $<HTMLButtonElement>("#parkings");
+  parkBtn.onclick = () => {
+    parkBtn.classList.toggle("active");
+    transit.showParkings = parkBtn.classList.contains("active");
+  };
   const preview = new PreviewLayer(city);
   world.scene.add(traffic.mesh, preview.group);
   const trafficBtn = $<HTMLButtonElement>("#traffic");
