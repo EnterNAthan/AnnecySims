@@ -6,6 +6,8 @@ Annecy en 3D, avec ses rues, son lac, ses transports et ses habitants. Observez 
 
 ![Vue d’Annecy dans Ane-sims : le lac, la vieille ville et la circulation autour du Pâquier](docs/images/annecy-sims.png)
 
+
+
 ## Dans la ville
 
 - 🏘️ **2 550 habitants** par défaut : 50 suivis par IA et 2 500 aux comportements automatiques.
@@ -14,7 +16,13 @@ Annecy en 3D, avec ses rues, son lac, ses transports et ses habitants. Observez 
 - 🎪 **Des événements à inventer** : proposez une décision, observez les réactions et consultez ses effets sur la ville.
 - 📊 **Une page `/stats`** pour suivre les appels au modèle, les erreurs et régler la configuration IA.
 
-## Lancer en local
+## Lancer en local & en ligne 
+
+### En ligne : 
+
+https://anne-sims.scale-app.cloud/
+
+### en local : 
 
 Prérequis : **Node.js 20+**, npm et une clé [Arkane Cloud](https://console.arkanecloud.com) pour les fonctions IA.
 
