@@ -1,6 +1,0 @@
-apiVersion: v2
-name: ane-sims
-description: Ane-sims - 3D simulation of Annecy (static front + Node API)
-type: application
-version: 0.1.0
-appVersion: "0.1.0"

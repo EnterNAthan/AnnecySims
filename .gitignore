@@ -9,4 +9,4 @@ data/interpret-cache.json
 dist-server
 
 # k8s secret with the Arkane API key
-helm/ane-sims/secret.yaml
+helm/*

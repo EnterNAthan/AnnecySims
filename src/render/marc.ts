@@ -1125,9 +1125,16 @@ export class MarcStory {
     camera.fov = 27;
     camera.updateProjectionMatrix();
     this.closeupCamera(0);
+    // indication pour lancer la suite, sinon personne ne devine qu'il faut appuyer
+    const hint = document.createElement("div");
+    hint.className = "intro-hint";
+    hint.textContent = "Press Spacebar to Continue";
+    document.body.appendChild(hint);
     const go = () => {
       if (this.phase !== "closeup") return;
       this.phase = "pullback";
+      hint.classList.add("gone");
+      setTimeout(() => hint.remove(), 600);
       this.introT = 0;
       const sph = new THREE.Spherical().setFromVector3(camera.position.clone().sub(controls.target));
       const crash = this.route.place(GATE_S + 8, () => 0), queue = this.route.place(GATE_S - 40, () => 0);

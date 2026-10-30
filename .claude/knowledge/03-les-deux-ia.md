@@ -54,7 +54,7 @@ Chemin : `src/sim/intelligence.ts` (dans le worker) → `POST /api/agents/decide
 Lots de **5** personnes, **1** appel en cours, `reasoning_effort: none`, température 0,3,
 3 000 tokens, timeout 60 s, 0,2 req/s, intervalle individuel 60 s, mémoire 16.
 **3 échecs consécutifs → pause globale de 30 s** ; les habitants poursuivent leur planning.
-Réglable en direct dans `/stats` (`GET/POST /api/ai-config`, polling page toutes les 2 s).
+Modèle (Qwen) et réglages figés dans `src/shared/aiConfig.ts`, indépendants de `ARKANE_MODEL` (événements seulement), transmis à la page par `GET /api/ai-config`.
 Bouton « Valeurs prudentes » pour restaurer.
 
 ### Pourquoi ce profil

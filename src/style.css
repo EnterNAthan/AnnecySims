@@ -1489,3 +1489,31 @@ body.presenting.focusing #decisions {
   opacity: 1;
   pointer-events: auto;
 }
+
+.intro-hint {
+  position: fixed;
+  left: 50%;
+  bottom: 8vh;
+  transform: translateX(-50%);
+  padding: 10px 22px;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font-size: 15px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  pointer-events: none;
+  z-index: 50;
+  animation: intro-hint-pulse 1.6s ease-in-out infinite;
+  transition: opacity 0.5s ease;
+}
+
+.intro-hint.gone {
+  opacity: 0 !important;
+  animation: none;
+}
+
+@keyframes intro-hint-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}

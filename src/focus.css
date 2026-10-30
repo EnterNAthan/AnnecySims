@@ -11,8 +11,6 @@
   white-space: nowrap;
 }
 
-#stats-link { display: inline-flex; align-items: center; color: var(--text); text-decoration: none; border-radius: 12px; background: var(--panel-strong); }
-#stats-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 #display-menu .ai-follow-row { flex-direction: column; align-items: stretch; white-space: normal; }
 #ai-follow { width: 280px; max-width: calc(100vw - 80px); padding: 8px; background: var(--panel-strong); color: var(--text); border: 1px solid var(--muted); border-radius: 8px; font: inherit; }
 

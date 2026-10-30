@@ -55,16 +55,12 @@ async function main() {
     });
   });
   send({ type: "init", residents, tourists, commuters, seed: 2026, startDate: startDate.toISOString(), aiEnabled: params.get("ai") !== "off" });
-  let lastAiConfig = "";
+  // configuration IA fixée par les variables d'environnement du serveur, lue une fois
   const syncAiConfig = async () => {
     try {
       const response = await fetch("/api/ai-config", { cache: "no-store" });
-      if (!response.ok) return;
-      const config = AiConfigSchema.parse(await response.json());
-      const serialized = JSON.stringify(config);
-      if (serialized !== lastAiConfig) { send({ type: "aiConfig", config }); lastAiConfig = serialized; }
+      if (response.ok) send({ type: "aiConfig", config: AiConfigSchema.parse(await response.json()) });
     } catch { /* La simulation reste disponible si la configuration est inaccessible. */ }
-    finally { window.setTimeout(syncAiConfig, 2000); }
   };
   void ready.then(syncAiConfig).catch(() => {});
 

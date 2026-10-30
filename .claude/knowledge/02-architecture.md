@@ -72,8 +72,7 @@ Page et worker chargent **chacun** `/city.json` et `/transit.json` séparément.
 
 Panneaux : barre de commande (`command.ts`), décisions et impacts (`decisions.ts`),
 historique et bilans (`history.ts`), fiche habitant, « Voix de la ville », compteurs,
-calques (trafic / bus / parkings). Page séparée **`/stats`** (`stats.html` + `src/stats.ts`
-+ `ui/aiConfig.ts`, `ui/aiLog.ts`) : mesures et configuration de l'IA individuelle.
+calques (trafic / bus / parkings). Configuration de l'IA individuelle figée (`src/shared/aiConfig.ts`), lue par la page via `GET /api/ai-config`.
 
 ## Paramètres d'URL
 
